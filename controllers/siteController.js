@@ -10,7 +10,7 @@ const { User, Project, Vendor, Expense, Labour } = require('../models');
 // Get site manager dashboard
 const getDashboard = async (req, res, next) => {
     try {
-        const userId = req.session.userId;
+        const userId = req.user.userId;
         const user = await User.findById(userId).select('-password');
 
         if (!user) {
@@ -66,7 +66,7 @@ const getMyAttendance = async (req, res, next) => {
 // Get all labours for assigned sites
 const getLabours = async (req, res, next) => {
     try {
-        const userId = req.session.userId;
+        const userId = req.user.userId;
         const user = await User.findById(userId);
 
         if (!user) {
@@ -190,7 +190,7 @@ const getGalleryImages = async (req, res, next) => {
 // Get expenses for assigned projects
 const getExpenses = async (req, res, next) => {
     try {
-        const userId = req.session.userId;
+        const userId = req.user.userId;
         const user = await User.findById(userId);
 
         if (!user) {
@@ -282,7 +282,7 @@ const markNotificationRead = async (req, res, next) => {
 
 const getProfile = async (req, res, next) => {
     try {
-        const userId = req.session.userId;
+        const userId = req.user.userId;
         const user = await User.findById(userId).select('-password');
 
         if (!user) {
@@ -319,7 +319,7 @@ const getVendors = async (req, res, next) => {
 
 const getProjects = async (req, res, next) => {
     try {
-        const userId = req.session.userId;
+        const userId = req.user.userId;
         const user = await User.findById(userId);
 
         if (!user) {
