@@ -5,7 +5,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { isAdmin } = require('../middleware/auth');
+const { isAuthenticated, isAdmin } = require('../middleware/auth');
 const {
   projectValidation,
   userValidation,
@@ -62,7 +62,8 @@ const {
   getLabours
 } = require('../controllers/adminController');
 
-// Apply admin middleware to all routes
+// Apply authentication and admin middleware to all routes
+router.use(isAuthenticated);
 router.use(isAdmin);
 
 // Dashboard

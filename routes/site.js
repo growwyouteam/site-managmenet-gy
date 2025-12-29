@@ -5,7 +5,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { isSiteManager } = require('../middleware/auth');
+const { isAuthenticated, isSiteManager } = require('../middleware/auth');
 const {
   labourValidation,
   attendanceValidation,
@@ -40,7 +40,8 @@ const {
   getProjects
 } = require('../controllers/siteController');
 
-// Apply site manager middleware to all routes
+// Apply authentication and site manager middleware to all routes
+router.use(isAuthenticated);
 router.use(isSiteManager);
 
 // Dashboard
