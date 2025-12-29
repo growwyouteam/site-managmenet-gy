@@ -1,9 +1,23 @@
 /**
  * Authentication Controller
- * Handles login, logout, and session management
+ * Handles login, logout, and JWT token management
  */
 
+const jwt = require('jsonwebtoken');
 const { User } = require('../models');
+
+// JWT secret from environment or default
+const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
+const JWT_EXPIRES_IN = '7d'; // Token expires in 7 days
+
+// Generate JWT token
+const generateToken = (userId, role, name, email) => {
+  return jwt.sign(
+    { userId, role, name, email },
+    JWT_SECRET,
+    { expiresIn: JWT_EXPIRES_IN }
+  );
+};
 
 // Login user (Admin or Site Manager)
 const login = async (req, res, next) => {
@@ -30,13 +44,15 @@ const login = async (req, res, next) => {
       });
     }
 
-    // Create session
-    req.session.userId = user._id.toString();
-    req.session.role = user.role;
-    req.session.name = user.name;
-    req.session.email = user.email;
+    // Generate JWT token
+    const token = generateToken(
+      user._id.toString(),
+      user.role,
+      user.name,
+      user.email
+    );
 
-    // Return user data (without password)
+    // Return user data (without password) and token
     const userData = user.toObject();
     delete userData.password;
 
@@ -44,7 +60,8 @@ const login = async (req, res, next) => {
       success: true,
       message: 'Login successful',
       data: {
-        user: userData
+        user: userData,
+        token
       }
     });
 
@@ -56,22 +73,12 @@ const login = async (req, res, next) => {
 // Logout user
 const logout = (req, res, next) => {
   try {
-    // Destroy session
-    req.session.destroy((err) => {
-      if (err) {
-        return res.status(500).json({
-          success: false,
-          error: 'Failed to logout'
-        });
-      }
-
-      res.clearCookie('connect.sid'); // Clear session cookie
-      res.json({
-        success: true,
-        message: 'Logout successful'
-      });
+    // With JWT, logout is handled client-side by removing the token
+    // Server doesn't need to do anything
+    res.json({
+      success: true,
+      message: 'Logout successful'
     });
-
   } catch (error) {
     next(error);
   }
@@ -80,16 +87,16 @@ const logout = (req, res, next) => {
 // Get current user info
 const getMe = async (req, res, next) => {
   try {
-    // Check if session exists
-    if (!req.session.userId) {
+    // User is already attached to req by auth middleware
+    if (!req.user || !req.user.userId) {
       return res.status(401).json({
         success: false,
         error: 'Not authenticated'
       });
     }
 
-    // Find user from session
-    const user = await User.findById(req.session.userId).select('-password');
+    // Find user from token data
+    const user = await User.findById(req.user.userId).select('-password');
 
     if (!user) {
       return res.status(404).json({

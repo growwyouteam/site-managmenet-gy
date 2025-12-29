@@ -5,7 +5,6 @@
 
 require('dotenv').config();
 const express = require('express');
-const session = require('express-session');
 const cors = require('cors');
 const helmet = require('helmet');
 
@@ -44,18 +43,6 @@ app.use(cors({
 // Body parser
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
-// Session configuration
-app.use(session({
-    secret: process.env.SESSION_SECRET || 'your-super-secret-key-change-in-production',
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-        secure: process.env.NODE_ENV === 'production',
-        httpOnly: true,
-        maxAge: 24 * 60 * 60 * 1000
-    }
-}));
 
 // ============ ROUTES ============
 
