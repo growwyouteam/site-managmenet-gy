@@ -1,1205 +1,783 @@
 /**
- * Admin Controller
- * Handles all admin-specific operations
+ * Admin Controller - MongoDB Version
+ * Handles all admin-specific operations with MongoDB
  */
 
-const bcrypt = require('bcryptjs');
-const db = require('../db');
+const { User, Project, Vendor, Expense, Labour, Contractor, ContractorPayment, Machine } = require('../models');
 
 // ============ DASHBOARD ============
 
 // Get dashboard summary
-const getDashboard = (req, res, next) => {
-  try {
-    const totalProjects = db.projects.length;
-    const runningProjects = db.projects.filter(p => p.status === 'running').length;
-    const completedProjects = db.projects.filter(p => p.status === 'completed').length;
-    const totalSiteManagers = db.users.filter(u => u.role === 'sitemanager' && u.active).length;
-    const totalLabours = db.labours.filter(l => l.active).length;
-    const totalExpenses = db.expenses.reduce((sum, e) => sum + e.amount, 0);
+const getDashboard = async (req, res, next) => {
+    try {
+        const totalProjects = await Project.countDocuments();
+        const runningProjects = await Project.countDocuments({ status: 'running' });
+        const completedProjects = await Project.countDocuments({ status: 'completed' });
+        const totalSiteManagers = await User.countDocuments({ role: 'sitemanager', active: true });
+        const totalLabours = await Labour.countDocuments({ active: true });
 
-    res.json({
-      success: true,
-      data: {
-        totalProjects,
-        runningProjects,
-        completedProjects,
-        totalSiteManagers,
-        totalLabours,
-        totalExpenses,
-        projects: db.projects
-      }
-    });
-  } catch (error) {
-    next(error);
-  }
+        const expensesResult = await Expense.aggregate([
+            { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]);
+        const totalExpenses = expensesResult.length > 0 ? expensesResult[0].total : 0;
+
+        const projects = await Project.find().populate('assignedManager', 'name email');
+
+        res.json({
+            success: true,
+            data: {
+                totalProjects,
+                runningProjects,
+                completedProjects,
+                totalSiteManagers,
+                totalLabours,
+                totalExpenses,
+                projects
+            }
+        });
+    } catch (error) {
+        next(error);
+    }
 };
 
 // ============ PROJECTS ============
 
 // Get all projects
-const getProjects = (req, res, next) => {
-  try {
-    res.json({
-      success: true,
-      data: db.projects
-    });
-  } catch (error) {
-    next(error);
-  }
+const getProjects = async (req, res, next) => {
+    try {
+        const projects = await Project.find().populate('assignedManager', 'name email').sort('-createdAt');
+        res.json({
+            success: true,
+            data: projects
+        });
+    } catch (error) {
+        next(error);
+    }
 };
 
 // Get single project detail
-const getProjectDetail = (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const project = db.projects.find(p => p.id === id);
+const getProjectDetail = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const project = await Project.findById(id).populate('assignedManager', 'name email');
 
-    if (!project) {
-      return res.status(404).json({
-        success: false,
-        error: 'Project not found'
-      });
+        if (!project) {
+            return res.status(404).json({
+                success: false,
+                error: 'Project not found'
+            });
+        }
+
+        const expenses = await Expense.find({ projectId: id });
+        const labours = await Labour.find({ assignedSite: id });
+
+        res.json({
+            success: true,
+            data: {
+                project,
+                expenses,
+                labours
+            }
+        });
+    } catch (error) {
+        next(error);
     }
-
-    // Get related data
-    const expenses = db.expenses.filter(e => e.projectId === id);
-    const stocks = db.stocks.filter(s => s.projectId === id);
-    const labours = db.labours.filter(l => l.assignedSite === id);
-    const attendance = db.attendance.filter(a => a.projectId === id);
-    const dailyReports = db.dailyReports.filter(r => r.projectId === id);
-    const gallery = db.gallery.filter(g => g.projectId === id);
-    const manager = db.users.find(u => u.id === project.assignedManager);
-
-    res.json({
-      success: true,
-      data: {
-        project,
-        expenses,
-        stocks,
-        labours,
-        attendance,
-        dailyReports,
-        gallery,
-        manager
-      }
-    });
-  } catch (error) {
-    next(error);
-  }
 };
 
 // Create new project
-const createProject = (req, res, next) => {
-  try {
-    const { name, location, startDate, endDate, budget, assignedManager, description } = req.body;
+const createProject = async (req, res, next) => {
+    try {
+        const { name, location, startDate, endDate, budget, assignedManager, description, status } = req.body;
 
-    const newProject = {
-      id: db.generateId(),
-      name,
-      location,
-      startDate,
-      endDate: endDate || null,
-      status: 'running',
-      assignedManager: assignedManager || null,
-      budget: parseFloat(budget),
-      expenses: 0,
-      description: description || '',
-      createdAt: new Date()
-    };
+        const newProject = new Project({
+            name,
+            location,
+            startDate,
+            endDate,
+            budget: parseFloat(budget) || 0,
+            assignedManager: assignedManager || null,
+            description: description || '',
+            status: status || 'running'
+        });
 
-    db.projects.push(newProject);
+        await newProject.save();
 
-    // Update site manager's assigned sites if manager is assigned
-    if (assignedManager) {
-      const manager = db.users.find(u => u.id === assignedManager);
-      if (manager) {
-        if (!manager.assignedSites) manager.assignedSites = [];
-        manager.assignedSites.push(newProject.id);
-      }
+        // Update site manager's assigned sites if manager is assigned
+        if (assignedManager) {
+            await User.findByIdAndUpdate(
+                assignedManager,
+                { $addToSet: { assignedSites: newProject._id } }
+            );
+        }
+
+        res.status(201).json({
+            success: true,
+            message: 'Project created successfully',
+            data: newProject
+        });
+    } catch (error) {
+        next(error);
     }
-
-    res.status(201).json({
-      success: true,
-      message: 'Project created successfully',
-      data: newProject
-    });
-  } catch (error) {
-    next(error);
-  }
 };
 
 // Update project
-const updateProject = (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const updates = req.body;
+const updateProject = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const updates = req.body;
 
-    const projectIndex = db.projects.findIndex(p => p.id === id);
+        const project = await Project.findByIdAndUpdate(
+            id,
+            updates,
+            { new: true, runValidators: true }
+        );
 
-    if (projectIndex === -1) {
-      return res.status(404).json({
-        success: false,
-        error: 'Project not found'
-      });
+        if (!project) {
+            return res.status(404).json({
+                success: false,
+                error: 'Project not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Project updated successfully',
+            data: project
+        });
+    } catch (error) {
+        next(error);
     }
-
-    // Update project
-    db.projects[projectIndex] = {
-      ...db.projects[projectIndex],
-      ...updates,
-      id // Preserve ID
-    };
-
-    res.json({
-      success: true,
-      message: 'Project updated successfully',
-      data: db.projects[projectIndex]
-    });
-  } catch (error) {
-    next(error);
-  }
 };
 
 // Delete project
-const deleteProject = (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const projectIndex = db.projects.findIndex(p => p.id === id);
+const deleteProject = async (req, res, next) => {
+    try {
+        const { id } = req.params;
 
-    if (projectIndex === -1) {
-      return res.status(404).json({
-        success: false,
-        error: 'Project not found'
-      });
+        const project = await Project.findByIdAndDelete(id);
+
+        if (!project) {
+            return res.status(404).json({
+                success: false,
+                error: 'Project not found'
+            });
+        }
+
+        // Delete related data
+        await Expense.deleteMany({ projectId: id });
+        await Labour.updateMany({ assignedSite: id }, { assignedSite: null });
+
+        res.json({
+            success: true,
+            message: 'Project deleted successfully'
+        });
+    } catch (error) {
+        next(error);
     }
-
-    db.projects.splice(projectIndex, 1);
-
-    res.json({
-      success: true,
-      message: 'Project deleted successfully'
-    });
-  } catch (error) {
-    next(error);
-  }
 };
 
-// ============ MACHINES ============
+// ============ USERS ============
 
-// Get all machines by category
-const getMachines = (req, res, next) => {
-  try {
-    const { category } = req.query;
+// Get all users (site managers)
+const getUsers = async (req, res, next) => {
+    try {
+        const users = await User.find({ role: 'sitemanager' })
+            .select('-password')
+            .sort('-createdAt');
 
-    if (category && db.machines[category]) {
-      return res.json({
-        success: true,
-        data: db.machines[category]
-      });
+        res.json({
+            success: true,
+            data: users
+        });
+    } catch (error) {
+        next(error);
     }
-
-    res.json({
-      success: true,
-      data: db.machines
-    });
-  } catch (error) {
-    next(error);
-  }
 };
 
-// Create machine
-const createMachine = (req, res, next) => {
-  try {
-    const { name, category, quantity, assignedSite, status, remarks, unit } = req.body;
+// Create new user (site manager)
+const createUser = async (req, res, next) => {
+    try {
+        const { name, email, password, phone, salary, dateOfJoining, role } = req.body;
 
-    if (!db.machines[category]) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid category'
-      });
+        // Check if user already exists
+        const existingUser = await User.findOne({ email: email.toLowerCase() });
+        if (existingUser) {
+            return res.status(400).json({
+                success: false,
+                error: 'User with this email already exists'
+            });
+        }
+
+        const newUser = new User({
+            name,
+            email: email.toLowerCase(),
+            password,
+            phone,
+            salary: parseFloat(salary) || 0,
+            dateOfJoining: dateOfJoining || Date.now(),
+            role: role || 'sitemanager',
+            active: true
+        });
+
+        await newUser.save();
+
+        // Remove password from response
+        const userResponse = newUser.toObject();
+        delete userResponse.password;
+
+        res.status(201).json({
+            success: true,
+            message: 'User created successfully',
+            data: userResponse
+        });
+    } catch (error) {
+        next(error);
     }
-
-    const newMachine = {
-      id: db.generateId(),
-      name,
-      category,
-      quantity: parseInt(quantity),
-      assignedSite: assignedSite || null,
-      status: status || 'available',
-      remarks: remarks || '',
-      unit: unit || 'units',
-      createdAt: new Date()
-    };
-
-    db.machines[category].push(newMachine);
-
-    res.status(201).json({
-      success: true,
-      message: 'Machine added successfully',
-      data: newMachine
-    });
-  } catch (error) {
-    next(error);
-  }
 };
 
-// Update machine
-const updateMachine = (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const updates = req.body;
+// Update user
+const updateUser = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const updates = req.body;
 
-    let found = false;
-    let updatedMachine = null;
+        // If password is being updated, it will be hashed by the pre-save hook
+        const user = await User.findById(id);
 
-    // Search in all categories
-    for (const category in db.machines) {
-      const machineIndex = db.machines[category].findIndex(m => m.id === id);
-      if (machineIndex !== -1) {
-        db.machines[category][machineIndex] = {
-          ...db.machines[category][machineIndex],
-          ...updates,
-          id // Preserve ID
-        };
-        updatedMachine = db.machines[category][machineIndex];
-        found = true;
-        break;
-      }
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                error: 'User not found'
+            });
+        }
+
+        // Update fields
+        Object.keys(updates).forEach(key => {
+            user[key] = updates[key];
+        });
+
+        await user.save();
+
+        // Remove password from response
+        const userResponse = user.toObject();
+        delete userResponse.password;
+
+        res.json({
+            success: true,
+            message: 'User updated successfully',
+            data: userResponse
+        });
+    } catch (error) {
+        next(error);
     }
-
-    if (!found) {
-      return res.status(404).json({
-        success: false,
-        error: 'Machine not found'
-      });
-    }
-
-    res.json({
-      success: true,
-      message: 'Machine updated successfully',
-      data: updatedMachine
-    });
-  } catch (error) {
-    next(error);
-  }
 };
 
-// Delete machine
-const deleteMachine = (req, res, next) => {
-  try {
-    const { id } = req.params;
+// Delete user
+const deleteUser = async (req, res, next) => {
+    try {
+        const { id } = req.params;
 
-    let found = false;
+        const user = await User.findByIdAndDelete(id);
 
-    // Search in all categories
-    for (const category in db.machines) {
-      const machineIndex = db.machines[category].findIndex(m => m.id === id);
-      if (machineIndex !== -1) {
-        db.machines[category].splice(machineIndex, 1);
-        found = true;
-        break;
-      }
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                error: 'User not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'User deleted successfully'
+        });
+    } catch (error) {
+        next(error);
     }
-
-    if (!found) {
-      return res.status(404).json({
-        success: false,
-        error: 'Machine not found'
-      });
-    }
-
-    res.json({
-      success: true,
-      message: 'Machine deleted successfully'
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// ============ STOCK ============
-
-// Get all stocks
-const getStocks = (req, res, next) => {
-  try {
-    const { projectId } = req.query;
-
-    if (projectId) {
-      const stocks = db.stocks.filter(s => s.projectId === projectId);
-      return res.json({
-        success: true,
-        data: stocks
-      });
-    }
-
-    res.json({
-      success: true,
-      data: db.stocks
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// Create stock
-const createStock = (req, res, next) => {
-  try {
-    const { projectId, materialName, unit, quantity, remarks } = req.body;
-
-    const newStock = {
-      id: db.generateId(),
-      projectId,
-      materialName,
-      unit,
-      quantity: parseFloat(quantity),
-      remarks: remarks || '',
-      addedBy: req.session.userId,
-      createdAt: new Date()
-    };
-
-    db.stocks.push(newStock);
-
-    res.status(201).json({
-      success: true,
-      message: 'Stock added successfully',
-      data: newStock
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// Update stock
-const updateStock = (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const updates = req.body;
-
-    const stockIndex = db.stocks.findIndex(s => s.id === id);
-
-    if (stockIndex === -1) {
-      return res.status(404).json({
-        success: false,
-        error: 'Stock not found'
-      });
-    }
-
-    db.stocks[stockIndex] = {
-      ...db.stocks[stockIndex],
-      ...updates,
-      id
-    };
-
-    res.json({
-      success: true,
-      message: 'Stock updated successfully',
-      data: db.stocks[stockIndex]
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// Delete stock
-const deleteStock = (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const stockIndex = db.stocks.findIndex(s => s.id === id);
-
-    if (stockIndex === -1) {
-      return res.status(404).json({
-        success: false,
-        error: 'Stock not found'
-      });
-    }
-
-    db.stocks.splice(stockIndex, 1);
-
-    res.json({
-      success: true,
-      message: 'Stock deleted successfully'
-    });
-  } catch (error) {
-    next(error);
-  }
 };
 
 // ============ VENDORS ============
 
 // Get all vendors
-const getVendors = (req, res, next) => {
-  try {
-    res.json({
-      success: true,
-      data: db.vendors
-    });
-  } catch (error) {
-    next(error);
-  }
+const getVendors = async (req, res, next) => {
+    try {
+        const vendors = await Vendor.find().sort('-createdAt');
+        res.json({
+            success: true,
+            data: vendors
+        });
+    } catch (error) {
+        next(error);
+    }
 };
 
-// Create vendor
-const createVendor = (req, res, next) => {
-  try {
-    const { name, contact, email, materialsSupplied } = req.body;
+// Create new vendor
+const createVendor = async (req, res, next) => {
+    try {
+        const { name, contact, email, address } = req.body;
 
-    const newVendor = {
-      id: db.generateId(),
-      name,
-      contact,
-      email: email || '',
-      materialsSupplied: materialsSupplied || [],
-      pendingAmount: 0,
-      totalSupplied: 0,
-      createdAt: new Date()
-    };
+        const newVendor = new Vendor({
+            name,
+            contact,
+            email: email ? email.toLowerCase() : undefined,
+            address
+        });
 
-    db.vendors.push(newVendor);
+        await newVendor.save();
 
-    res.status(201).json({
-      success: true,
-      message: 'Vendor created successfully',
-      data: newVendor
-    });
-  } catch (error) {
-    next(error);
-  }
+        res.status(201).json({
+            success: true,
+            message: 'Vendor created successfully',
+            data: newVendor
+        });
+    } catch (error) {
+        next(error);
+    }
 };
 
 // Update vendor
-const updateVendor = (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const updates = req.body;
+const updateVendor = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const updates = req.body;
 
-    const vendorIndex = db.vendors.findIndex(v => v.id === id);
+        const vendor = await Vendor.findByIdAndUpdate(
+            id,
+            updates,
+            { new: true, runValidators: true }
+        );
 
-    if (vendorIndex === -1) {
-      return res.status(404).json({
-        success: false,
-        error: 'Vendor not found'
-      });
+        if (!vendor) {
+            return res.status(404).json({
+                success: false,
+                error: 'Vendor not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Vendor updated successfully',
+            data: vendor
+        });
+    } catch (error) {
+        next(error);
     }
-
-    db.vendors[vendorIndex] = {
-      ...db.vendors[vendorIndex],
-      ...updates,
-      id
-    };
-
-    res.json({
-      success: true,
-      message: 'Vendor updated successfully',
-      data: db.vendors[vendorIndex]
-    });
-  } catch (error) {
-    next(error);
-  }
 };
 
 // Delete vendor
-const deleteVendor = (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const vendorIndex = db.vendors.findIndex(v => v.id === id);
+const deleteVendor = async (req, res, next) => {
+    try {
+        const { id } = req.params;
 
-    if (vendorIndex === -1) {
-      return res.status(404).json({
-        success: false,
-        error: 'Vendor not found'
-      });
+        const vendor = await Vendor.findByIdAndDelete(id);
+
+        if (!vendor) {
+            return res.status(404).json({
+                success: false,
+                error: 'Vendor not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Vendor deleted successfully'
+        });
+    } catch (error) {
+        next(error);
     }
-
-    db.vendors.splice(vendorIndex, 1);
-
-    res.json({
-      success: true,
-      message: 'Vendor deleted successfully'
-    });
-  } catch (error) {
-    next(error);
-  }
 };
 
 // Record vendor payment
-const recordVendorPayment = (req, res, next) => {
-  try {
-    const { vendorId, amount, paymentMode, remarks } = req.body;
+const recordVendorPayment = async (req, res, next) => {
+    try {
+        const { vendorId, amount } = req.body;
 
-    const vendor = db.vendors.find(v => v.id === vendorId);
+        const vendor = await Vendor.findById(vendorId);
 
-    if (!vendor) {
-      return res.status(404).json({
-        success: false,
-        error: 'Vendor not found'
-      });
+        if (!vendor) {
+            return res.status(404).json({
+                success: false,
+                error: 'Vendor not found'
+            });
+        }
+
+        vendor.pendingAmount = Math.max(0, vendor.pendingAmount - parseFloat(amount));
+        await vendor.save();
+
+        res.json({
+            success: true,
+            message: 'Payment recorded successfully',
+            data: vendor
+        });
+    } catch (error) {
+        next(error);
     }
-
-    // Reduce pending amount
-    vendor.pendingAmount = Math.max(0, vendor.pendingAmount - parseFloat(amount));
-
-    // Record in accounts
-    const transaction = {
-      id: db.generateId(),
-      type: 'vendor_payment',
-      vendorId,
-      vendorName: vendor.name,
-      amount: parseFloat(amount),
-      paymentMode: paymentMode || 'cash',
-      remarks: remarks || '',
-      recordedBy: req.session.userId,
-      createdAt: new Date()
-    };
-
-    if (paymentMode === 'bank') {
-      db.accounts.bankTransactions.push(transaction);
-    } else {
-      db.accounts.cashTransactions.push(transaction);
-    }
-
-    res.json({
-      success: true,
-      message: 'Payment recorded successfully',
-      data: { vendor, transaction }
-    });
-  } catch (error) {
-    next(error);
-  }
 };
 
 // ============ EXPENSES ============
 
 // Get all expenses
-const getExpenses = (req, res, next) => {
-  try {
-    const { projectId } = req.query;
+const getExpenses = async (req, res, next) => {
+    try {
+        const expenses = await Expense.find()
+            .populate('projectId', 'name location')
+            .populate('addedBy', 'name email')
+            .sort('-createdAt');
 
-    if (projectId) {
-      const expenses = db.expenses.filter(e => e.projectId === projectId);
-      return res.json({
-        success: true,
-        data: expenses
-      });
+        res.json({
+            success: true,
+            data: expenses
+        });
+    } catch (error) {
+        next(error);
     }
-
-    res.json({
-      success: true,
-      data: db.expenses
-    });
-  } catch (error) {
-    next(error);
-  }
 };
 
-// Create expense (admin can also add)
-const createExpense = (req, res, next) => {
-  try {
-    const { projectId, name, amount, voucherNumber, remarks, slipImage } = req.body;
+// Create new expense
+const createExpense = async (req, res, next) => {
+    try {
+        const { projectId, name, amount, voucherNumber, category, remarks } = req.body;
 
-    const newExpense = {
-      id: db.generateId(),
-      projectId,
-      name,
-      amount: parseFloat(amount),
-      voucherNumber: voucherNumber || '',
-      remarks: remarks || '',
-      slipImage: slipImage || null,
-      addedBy: req.session.userId,
-      createdAt: new Date()
-    };
+        const newExpense = new Expense({
+            projectId,
+            name,
+            amount: parseFloat(amount),
+            voucherNumber,
+            category: category || 'material',
+            remarks,
+            addedBy: req.session.userId
+        });
 
-    db.expenses.push(newExpense);
+        await newExpense.save();
 
-    // Update project expenses
-    const project = db.projects.find(p => p.id === projectId);
-    if (project) {
-      project.expenses = (project.expenses || 0) + parseFloat(amount);
+        // Update project expenses
+        await Project.findByIdAndUpdate(
+            projectId,
+            { $inc: { expenses: parseFloat(amount) } }
+        );
+
+        res.status(201).json({
+            success: true,
+            message: 'Expense added successfully',
+            data: newExpense
+        });
+    } catch (error) {
+        next(error);
     }
-
-    res.status(201).json({
-      success: true,
-      message: 'Expense added successfully',
-      data: newExpense
-    });
-  } catch (error) {
-    next(error);
-  }
 };
 
 // Delete expense
-const deleteExpense = (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const expenseIndex = db.expenses.findIndex(e => e.id === id);
+const deleteExpense = async (req, res, next) => {
+    try {
+        const { id } = req.params;
 
-    if (expenseIndex === -1) {
-      return res.status(404).json({
-        success: false,
-        error: 'Expense not found'
-      });
-    }
+        const expense = await Expense.findById(id);
 
-    const expense = db.expenses[expenseIndex];
-
-    // Update project expenses
-    const project = db.projects.find(p => p.id === expense.projectId);
-    if (project) {
-      project.expenses = Math.max(0, (project.expenses || 0) - expense.amount);
-    }
-
-    db.expenses.splice(expenseIndex, 1);
-
-    res.json({
-      success: true,
-      message: 'Expense deleted successfully'
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// ============ USERS (Site Managers) ============
-
-// Get all users
-const getUsers = (req, res, next) => {
-  try {
-    const { role } = req.query;
-
-    let users = db.users;
-
-    if (role) {
-      users = users.filter(u => u.role === role);
-    }
-
-    // Remove passwords from response
-    const safeUsers = users.map(({ password, ...user }) => user);
-
-    res.json({
-      success: true,
-      data: safeUsers
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// Create site manager
-const createUser = async (req, res, next) => {
-  try {
-    const { name, email, password, phone, salary, assignedSites } = req.body;
-
-    // Check if email already exists
-    const existingUser = db.users.find(u => u.email === email);
-    if (existingUser) {
-      return res.status(400).json({
-        success: false,
-        error: 'Email already exists'
-      });
-    }
-
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const newUser = {
-      id: db.generateId(),
-      name,
-      email,
-      password: hashedPassword,
-      role: 'sitemanager',
-      phone: phone || '',
-      salary: parseFloat(salary) || 0,
-      assignedSites: assignedSites || [],
-      active: true,
-      createdAt: new Date()
-    };
-
-    db.users.push(newUser);
-
-    // Remove password from response
-    const { password: _, ...userData } = newUser;
-
-    res.status(201).json({
-      success: true,
-      message: 'Site manager created successfully',
-      data: userData
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// Update user
-const updateUser = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const updates = req.body;
-
-    const userIndex = db.users.findIndex(u => u.id === id);
-
-    if (userIndex === -1) {
-      return res.status(404).json({
-        success: false,
-        error: 'User not found'
-      });
-    }
-
-    // If password is being updated, hash it
-    if (updates.password) {
-      updates.password = await bcrypt.hash(updates.password, 10);
-    }
-
-    db.users[userIndex] = {
-      ...db.users[userIndex],
-      ...updates,
-      id
-    };
-
-    // Remove password from response
-    const { password, ...userData } = db.users[userIndex];
-
-    res.json({
-      success: true,
-      message: 'User updated successfully',
-      data: userData
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// Delete/Deactivate user
-const deleteUser = (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const userIndex = db.users.findIndex(u => u.id === id);
-
-    if (userIndex === -1) {
-      return res.status(404).json({
-        success: false,
-        error: 'User not found'
-      });
-    }
-
-    // Don't allow deleting admin
-    if (db.users[userIndex].role === 'admin') {
-      return res.status(400).json({
-        success: false,
-        error: 'Cannot delete admin user'
-      });
-    }
-
-    // Deactivate instead of delete
-    db.users[userIndex].active = false;
-
-    res.json({
-      success: true,
-      message: 'User deactivated successfully'
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// ============ TRANSFERS ============
-
-// Get all transfers
-const getTransfers = (req, res, next) => {
-  try {
-    res.json({
-      success: true,
-      data: db.transfers
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// Create transfer
-const createTransfer = (req, res, next) => {
-  try {
-    const { type, itemId, fromProject, toProject, quantity, remarks } = req.body;
-
-    const newTransfer = {
-      id: db.generateId(),
-      type, // 'labour', 'machine', 'stock'
-      itemId,
-      fromProject,
-      toProject,
-      quantity: quantity || 1,
-      remarks: remarks || '',
-      status: 'completed',
-      transferredBy: req.session.userId,
-      createdAt: new Date()
-    };
-
-    // Update item assignment based on type
-    if (type === 'labour') {
-      const labour = db.labours.find(l => l.id === itemId);
-      if (labour) {
-        labour.assignedSite = toProject;
-        // Keep attendance history linked to labourId
-      }
-    } else if (type === 'machine') {
-      // Search in all machine categories
-      for (const category in db.machines) {
-        const machine = db.machines[category].find(m => m.id === itemId);
-        if (machine) {
-          machine.assignedSite = toProject;
-          break;
+        if (!expense) {
+            return res.status(404).json({
+                success: false,
+                error: 'Expense not found'
+            });
         }
-      }
-    } else if (type === 'stock') {
-      const stock = db.stocks.find(s => s.id === itemId);
-      if (stock) {
-        // Reduce from source
-        stock.quantity -= parseFloat(quantity);
-        
-        // Add to destination
-        const newStock = {
-          id: db.generateId(),
-          projectId: toProject,
-          materialName: stock.materialName,
-          unit: stock.unit,
-          quantity: parseFloat(quantity),
-          remarks: `Transferred from ${fromProject}`,
-          addedBy: req.session.userId,
-          createdAt: new Date()
-        };
-        db.stocks.push(newStock);
-      }
+
+        // Update project expenses
+        await Project.findByIdAndUpdate(
+            expense.projectId,
+            { $inc: { expenses: -expense.amount } }
+        );
+
+        await expense.deleteOne();
+
+        res.json({
+            success: true,
+            message: 'Expense deleted successfully'
+        });
+    } catch (error) {
+        next(error);
     }
-
-    db.transfers.push(newTransfer);
-
-    res.status(201).json({
-      success: true,
-      message: 'Transfer completed successfully',
-      data: newTransfer
-    });
-  } catch (error) {
-    next(error);
-  }
 };
 
-// ============ ACCOUNTS ============
+// ============ LABOURS ============
 
-// Get accounts summary
-const getAccounts = (req, res, next) => {
-  try {
-    const totalExpenses = db.expenses.reduce((sum, e) => sum + e.amount, 0);
-    const totalBankTransactions = db.accounts.bankTransactions.reduce((sum, t) => sum + t.amount, 0);
-    const totalCashTransactions = db.accounts.cashTransactions.reduce((sum, t) => sum + t.amount, 0);
+// Get all labours
+const getLabours = async (req, res, next) => {
+    try {
+        const labours = await Labour.find()
+            .populate('assignedSite', 'name location')
+            .populate('enrolledBy', 'name email')
+            .sort('-createdAt');
 
-    res.json({
-      success: true,
-      data: {
-        capital: db.accounts.capital,
-        totalExpenses,
-        totalBankTransactions,
-        totalCashTransactions,
-        bankTransactions: db.accounts.bankTransactions,
-        cashTransactions: db.accounts.cashTransactions,
-        expenses: db.expenses
-      }
-    });
-  } catch (error) {
-    next(error);
-  }
+        res.json({
+            success: true,
+            data: labours
+        });
+    } catch (error) {
+        next(error);
+    }
 };
 
-// Add capital
-const addCapital = (req, res, next) => {
-  try {
-    const { amount } = req.body;
-    db.accounts.capital += parseFloat(amount);
+// ============ CONTRACTORS ============
 
-    res.json({
-      success: true,
-      message: 'Capital added successfully',
-      data: { capital: db.accounts.capital }
-    });
-  } catch (error) {
-    next(error);
-  }
+const getContractors = async (req, res, next) => {
+    try {
+        const contractors = await Contractor.find().sort('-createdAt');
+        res.json({
+            success: true,
+            data: contractors
+        });
+    } catch (error) {
+        next(error);
+    }
 };
 
-// Add transaction
-const addTransaction = (req, res, next) => {
-  try {
-    const { type, amount, description, paymentMode } = req.body;
-
-    const transaction = {
-      id: db.generateId(),
-      type,
-      amount: parseFloat(amount),
-      description: description || '',
-      recordedBy: req.session.userId,
-      createdAt: new Date()
-    };
-
-    if (paymentMode === 'bank') {
-      db.accounts.bankTransactions.push(transaction);
-    } else {
-      db.accounts.cashTransactions.push(transaction);
+const createContractor = async (req, res, next) => {
+    try {
+        const contractor = new Contractor(req.body);
+        await contractor.save();
+        res.status(201).json({
+            success: true,
+            message: 'Contractor created successfully',
+            data: contractor
+        });
+    } catch (error) {
+        next(error);
     }
-
-    res.status(201).json({
-      success: true,
-      message: 'Transaction recorded successfully',
-      data: transaction
-    });
-  } catch (error) {
-    next(error);
-  }
 };
 
-// ============ REPORTS ============
-
-// Generate reports
-const generateReport = (req, res, next) => {
-  try {
-    const { type, startDate, endDate, projectId, managerId } = req.query;
-
-    let data = {};
-
-    // Filter by date range
-    const filterByDate = (items) => {
-      if (!startDate && !endDate) return items;
-      return items.filter(item => {
-        const itemDate = new Date(item.createdAt);
-        const start = startDate ? new Date(startDate) : new Date(0);
-        const end = endDate ? new Date(endDate) : new Date();
-        return itemDate >= start && itemDate <= end;
-      });
-    };
-
-    if (type === 'expenses') {
-      let expenses = db.expenses;
-      if (projectId) expenses = expenses.filter(e => e.projectId === projectId);
-      expenses = filterByDate(expenses);
-      data = { expenses };
-    } else if (type === 'attendance') {
-      let attendance = db.attendance;
-      if (projectId) attendance = attendance.filter(a => a.projectId === projectId);
-      if (managerId) attendance = attendance.filter(a => a.userId === managerId);
-      attendance = filterByDate(attendance);
-      data = { attendance };
-    } else if (type === 'pl') {
-      // Profit & Loss
-      const totalRevenue = db.accounts.capital;
-      const totalExpenses = db.expenses.reduce((sum, e) => sum + e.amount, 0);
-      const profit = totalRevenue - totalExpenses;
-      data = { totalRevenue, totalExpenses, profit };
-    } else {
-      // Full report
-      data = {
-        projects: db.projects,
-        expenses: filterByDate(db.expenses),
-        attendance: filterByDate(db.attendance),
-        stocks: db.stocks,
-        vendors: db.vendors
-      };
+const updateContractor = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const contractor = await Contractor.findByIdAndUpdate(id, req.body, { new: true });
+        if (!contractor) {
+            return res.status(404).json({
+                success: false,
+                error: 'Contractor not found'
+            });
+        }
+        res.json({
+            success: true,
+            message: 'Contractor updated successfully',
+            data: contractor
+        });
+    } catch (error) {
+        next(error);
     }
-
-    res.json({
-      success: true,
-      data
-    });
-  } catch (error) {
-    next(error);
-  }
 };
 
-// ============ ATTENDANCE (View) ============
-
-// Get all attendance records
-const getAttendance = (req, res, next) => {
-  try {
-    const { projectId, userId } = req.query;
-
-    let attendance = db.attendance;
-
-    if (projectId) {
-      attendance = attendance.filter(a => a.projectId === projectId);
+const deleteContractor = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const contractor = await Contractor.findByIdAndDelete(id);
+        if (!contractor) {
+            return res.status(404).json({
+                success: false,
+                error: 'Contractor not found'
+            });
+        }
+        res.json({
+            success: true,
+            message: 'Contractor deleted successfully'
+        });
+    } catch (error) {
+        next(error);
     }
-
-    if (userId) {
-      attendance = attendance.filter(a => a.userId === userId);
-    }
-
-    res.json({
-      success: true,
-      data: attendance
-    });
-  } catch (error) {
-    next(error);
-  }
 };
 
-// Get labour attendance
-const getLabourAttendance = (req, res, next) => {
-  try {
-    const { projectId, labourId } = req.query;
-
-    let attendance = db.labourAttendance;
-
-    if (projectId) {
-      attendance = attendance.filter(a => a.projectId === projectId);
+const getContractorPayments = async (req, res, next) => {
+    try {
+        const { contractorId } = req.params;
+        const payments = await ContractorPayment.find({ contractorId }).sort('-createdAt');
+        res.json({
+            success: true,
+            data: payments
+        });
+    } catch (error) {
+        next(error);
     }
-
-    if (labourId) {
-      attendance = attendance.filter(a => a.labourId === labourId);
-    }
-
-    res.json({
-      success: true,
-      data: attendance
-    });
-  } catch (error) {
-    next(error);
-  }
 };
 
-// ============ NOTIFICATIONS ============
-
-// Get all notifications
-const getNotifications = (req, res, next) => {
-  try {
-    // Admin sees all notifications
-    const notifications = db.notifications.filter(n => 
-      n.recipientRole === 'admin' || n.senderId === req.session.userId
-    );
-
-    res.json({
-      success: true,
-      data: notifications
-    });
-  } catch (error) {
-    next(error);
-  }
+const createContractorPayment = async (req, res, next) => {
+    try {
+        const payment = new ContractorPayment(req.body);
+        await payment.save();
+        res.status(201).json({
+            success: true,
+            message: 'Payment recorded successfully',
+            data: payment
+        });
+    } catch (error) {
+        next(error);
+    }
 };
 
-// Send notification
-const sendNotification = (req, res, next) => {
-  try {
-    const { recipientId, recipientRole, message, type } = req.body;
-
-    const notification = {
-      id: db.generateId(),
-      senderId: req.session.userId,
-      senderName: req.session.name,
-      recipientId: recipientId || null,
-      recipientRole: recipientRole || 'sitemanager',
-      message,
-      type: type || 'general',
-      read: false,
-      createdAt: new Date()
-    };
-
-    db.notifications.push(notification);
-
-    // Emit socket event (handled in server.js)
-    if (req.app.get('io')) {
-      const io = req.app.get('io');
-      if (recipientId) {
-        io.to(recipientId).emit('notification', notification);
-      } else {
-        io.emit('notification', notification);
-      }
+// Placeholder functions for other features
+const getMachines = async (req, res, next) => {
+    try {
+        const machines = await Machine.find().sort('-createdAt');
+        res.json({
+            success: true,
+            data: machines
+        });
+    } catch (error) {
+        next(error);
     }
-
-    res.status(201).json({
-      success: true,
-      message: 'Notification sent successfully',
-      data: notification
-    });
-  } catch (error) {
-    next(error);
-  }
 };
 
-// Mark notification as read
-const markNotificationRead = (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const notification = db.notifications.find(n => n.id === id);
-
-    if (!notification) {
-      return res.status(404).json({
-        success: false,
-        error: 'Notification not found'
-      });
+const createMachine = async (req, res, next) => {
+    try {
+        const machine = new Machine(req.body);
+        await machine.save();
+        res.status(201).json({
+            success: true,
+            message: 'Machine added successfully',
+            data: machine
+        });
+    } catch (error) {
+        next(error);
     }
-
-    notification.read = true;
-
-    res.json({
-      success: true,
-      message: 'Notification marked as read'
-    });
-  } catch (error) {
-    next(error);
-  }
 };
 
-// Get all labours (for admin view)
-const getLabours = (req, res, next) => {
-  try {
-    const { projectId } = req.query;
-
-    let labours = db.labours;
-
-    if (projectId) {
-      labours = labours.filter(l => l.assignedSite === projectId);
+const updateMachine = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const machine = await Machine.findByIdAndUpdate(id, req.body, { new: true });
+        if (!machine) {
+            return res.status(404).json({
+                success: false,
+                error: 'Machine not found'
+            });
+        }
+        res.json({
+            success: true,
+            message: 'Machine updated successfully',
+            data: machine
+        });
+    } catch (error) {
+        next(error);
     }
+};
 
-    res.json({
-      success: true,
-      data: labours
-    });
-  } catch (error) {
-    next(error);
-  }
+const deleteMachine = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const machine = await Machine.findByIdAndDelete(id);
+        if (!machine) {
+            return res.status(404).json({
+                success: false,
+                error: 'Machine not found'
+            });
+        }
+        res.json({
+            success: true,
+            message: 'Machine deleted successfully'
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const getStocks = async (req, res, next) => {
+    res.json({ success: true, data: [] });
+};
+
+const createStock = async (req, res, next) => {
+    res.json({ success: true, message: 'Feature coming soon' });
+};
+
+const updateStock = async (req, res, next) => {
+    res.json({ success: true, message: 'Feature coming soon' });
+};
+
+const deleteStock = async (req, res, next) => {
+    res.json({ success: true, message: 'Feature coming soon' });
+};
+
+const getTransfers = async (req, res, next) => {
+    res.json({ success: true, data: [] });
+};
+
+const createTransfer = async (req, res, next) => {
+    res.json({ success: true, message: 'Feature coming soon' });
+};
+
+const getAccounts = async (req, res, next) => {
+    res.json({ success: true, data: { capital: 0, bankTransactions: [], cashTransactions: [] } });
+};
+
+const addCapital = async (req, res, next) => {
+    res.json({ success: true, message: 'Feature coming soon' });
+};
+
+const addTransaction = async (req, res, next) => {
+    res.json({ success: true, message: 'Feature coming soon' });
+};
+
+const generateReport = async (req, res, next) => {
+    res.json({ success: true, data: [] });
+};
+
+const getAttendance = async (req, res, next) => {
+    res.json({ success: true, data: [] });
+};
+
+const getLabourAttendance = async (req, res, next) => {
+    res.json({ success: true, data: [] });
+};
+
+const getNotifications = async (req, res, next) => {
+    res.json({ success: true, data: [] });
+};
+
+const sendNotification = async (req, res, next) => {
+    res.json({ success: true, message: 'Feature coming soon' });
+};
+
+const markNotificationRead = async (req, res, next) => {
+    res.json({ success: true, message: 'Feature coming soon' });
 };
 
 module.exports = {
-  getDashboard,
-  getProjects,
-  getProjectDetail,
-  createProject,
-  updateProject,
-  deleteProject,
-  getMachines,
-  createMachine,
-  updateMachine,
-  deleteMachine,
-  getStocks,
-  createStock,
-  updateStock,
-  deleteStock,
-  getVendors,
-  createVendor,
-  updateVendor,
-  deleteVendor,
-  recordVendorPayment,
-  getExpenses,
-  createExpense,
-  deleteExpense,
-  getUsers,
-  createUser,
-  updateUser,
-  deleteUser,
-  getTransfers,
-  createTransfer,
-  getAccounts,
-  addCapital,
-  addTransaction,
-  generateReport,
-  getAttendance,
-  getLabourAttendance,
-  getNotifications,
-  sendNotification,
-  markNotificationRead,
-  getLabours
+    getDashboard,
+    getProjects,
+    getProjectDetail,
+    createProject,
+    updateProject,
+    deleteProject,
+    getMachines,
+    createMachine,
+    updateMachine,
+    deleteMachine,
+    getStocks,
+    createStock,
+    updateStock,
+    deleteStock,
+    getVendors,
+    createVendor,
+    updateVendor,
+    deleteVendor,
+    recordVendorPayment,
+    getExpenses,
+    createExpense,
+    deleteExpense,
+    getUsers,
+    createUser,
+    updateUser,
+    deleteUser,
+    getContractors,
+    createContractor,
+    updateContractor,
+    deleteContractor,
+    getContractorPayments,
+    createContractorPayment,
+    getTransfers,
+    createTransfer,
+    getAccounts,
+    addCapital,
+    addTransaction,
+    generateReport,
+    getAttendance,
+    getLabourAttendance,
+    getNotifications,
+    sendNotification,
+    markNotificationRead,
+    getLabours
 };

@@ -42,6 +42,12 @@ const {
   createUser,
   updateUser,
   deleteUser,
+  getContractors,
+  createContractor,
+  updateContractor,
+  deleteContractor,
+  getContractorPayments,
+  createContractorPayment,
   getTransfers,
   createTransfer,
   getAccounts,
@@ -98,6 +104,14 @@ router.get('/users', getUsers);
 router.post('/users', userValidation, createUser);
 router.put('/users/:id', updateUser);
 router.delete('/users/:id', deleteUser);
+
+// Contractors
+router.get('/contractors', getContractors);
+router.post('/contractors', createContractor);
+router.put('/contractors/:id', updateContractor);
+router.delete('/contractors/:id', deleteContractor);
+router.get('/contractors/:contractorId/payments', getContractorPayments);
+router.post('/contractors/payments', createContractorPayment);
 
 // Transfers
 router.get('/transfers', getTransfers);

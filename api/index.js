@@ -9,6 +9,12 @@ const session = require('express-session');
 const cors = require('cors');
 const helmet = require('helmet');
 
+// Import MongoDB connection
+const connectDB = require('../config/database');
+
+// Connect to MongoDB
+connectDB();
+
 // Import routes
 const authRoutes = require('../routes/auth');
 const adminRoutes = require('../routes/admin');
@@ -27,10 +33,12 @@ app.use(helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
 
-// CORS configuration
+// CORS configuration - Allow all origins in production for Vercel
 app.use(cors({
-    origin: process.env.FRONTEND_URL || '*',
-    credentials: true
+    origin: true, // Reflects the request origin
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
 }));
 
 // Body parser

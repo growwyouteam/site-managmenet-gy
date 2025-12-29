@@ -3,8 +3,7 @@
  * Handles login, logout, and session management
  */
 
-const bcrypt = require('bcryptjs');
-const db = require('../db');
+const { User } = require('../models');
 
 // Login user (Admin or Site Manager)
 const login = async (req, res, next) => {
@@ -12,7 +11,7 @@ const login = async (req, res, next) => {
     const { email, password } = req.body;
 
     // Find user by email
-    const user = db.users.find(u => u.email === email && u.active);
+    const user = await User.findOne({ email: email.toLowerCase(), active: true });
 
     if (!user) {
       return res.status(401).json({
@@ -22,7 +21,7 @@ const login = async (req, res, next) => {
     }
 
     // Verify password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
+    const isPasswordValid = await user.comparePassword(password);
 
     if (!isPasswordValid) {
       return res.status(401).json({
@@ -32,18 +31,21 @@ const login = async (req, res, next) => {
     }
 
     // Create session
-    req.session.userId = user.id;
+    req.session.userId = user._id.toString();
     req.session.role = user.role;
     req.session.name = user.name;
     req.session.email = user.email;
 
     // Return user data (without password)
-    const { password: _, ...userData } = user;
+    const userData = user.toObject();
+    delete userData.password;
 
     res.json({
       success: true,
       message: 'Login successful',
-      user: userData
+      data: {
+        user: userData
+      }
     });
 
   } catch (error) {
@@ -76,7 +78,7 @@ const logout = (req, res, next) => {
 };
 
 // Get current user info
-const getMe = (req, res, next) => {
+const getMe = async (req, res, next) => {
   try {
     // Check if session exists
     if (!req.session.userId) {
@@ -87,7 +89,7 @@ const getMe = (req, res, next) => {
     }
 
     // Find user from session
-    const user = db.users.find(u => u.id === req.session.userId);
+    const user = await User.findById(req.session.userId).select('-password');
 
     if (!user) {
       return res.status(404).json({
@@ -96,12 +98,9 @@ const getMe = (req, res, next) => {
       });
     }
 
-    // Return user data (without password)
-    const { password, ...userData } = user;
-
     res.json({
       success: true,
-      user: userData
+      data: user
     });
 
   } catch (error) {

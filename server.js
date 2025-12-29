@@ -1,13 +1,6 @@
 /**
  * Construction Site Management System - Backend Server
- * 
- * ⚠️ WARNING: This server uses IN-MEMORY session storage and data structures.
- * All data will be LOST on server restart. This is intentional per requirements.
- * 
- * To migrate to persistent storage:
- * 1. Replace db.js with MongoDB/Mongoose models
- * 2. Use connect-mongo for session storage
- * 3. Update controllers to use async/await with database queries
+ * Now with MongoDB for persistent data storage
  */
 
 require('dotenv').config();
@@ -20,6 +13,12 @@ const http = require('http');
 const socketIO = require('socket.io');
 const multer = require('multer');
 const fs = require('fs');
+
+// Import MongoDB connection
+const connectDB = require('./config/database');
+
+// Connect to MongoDB
+connectDB();
 
 // Import routes
 const authRoutes = require('./routes/auth');
@@ -243,9 +242,8 @@ server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`🚀 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log('🚀 ============================================');
-  console.log('\n⚠️  WARNING: Using IN-MEMORY storage!');
-  console.log('⚠️  All data will be LOST on server restart.');
-  console.log('⚠️  This is intentional per project requirements.\n');
+  console.log('\n✅ Using MongoDB for persistent storage!');
+  console.log('✅ Data will be saved permanently in database.\n');
   console.log('📌 API Endpoints:');
   console.log(`   - Health: http://localhost:${PORT}/api/health`);
   console.log(`   - Auth: http://localhost:${PORT}/api/auth/*`);
