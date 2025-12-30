@@ -100,7 +100,7 @@ const enrollLabour = async (req, res, next) => {
             dailyWage: parseFloat(dailyWage),
             designation,
             assignedSite,
-            enrolledBy: req.session.userId,
+            enrolledBy: req.user.userId,
             active: true
         });
 
@@ -295,7 +295,7 @@ const addExpense = async (req, res, next) => {
             voucherNumber,
             category: category || 'material',
             remarks,
-            addedBy: req.session.userId
+            addedBy: req.user.userId
         });
 
         await newExpense.save();

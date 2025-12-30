@@ -444,7 +444,7 @@ const createExpense = async (req, res, next) => {
             voucherNumber,
             category: category || 'material',
             remarks,
-            addedBy: req.session.userId
+            addedBy: req.user.userId
         });
 
         await newExpense.save();
