@@ -10,5 +10,6 @@ module.exports = {
     Labour: require('./Labour'),
     Contractor: require('./Contractor'),
     ContractorPayment: require('./ContractorPayment'),
-    Machine: require('./Machine')
+    Machine: require('./Machine'),
+    Stock: require('./Stock')
 };

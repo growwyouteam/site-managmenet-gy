@@ -3,7 +3,7 @@
  * Handles all site manager-specific operations with MongoDB
  */
 
-const { User, Project, Vendor, Expense, Labour } = require('../models');
+const { User, Project, Vendor, Expense, Labour, Stock } = require('../models');
 
 // ============ DASHBOARD ============
 
@@ -158,11 +158,79 @@ const getLabourAttendance = async (req, res, next) => {
 // ============ STOCK IN ============
 
 const addStockIn = async (req, res, next) => {
-    res.json({ success: true, message: 'Feature coming soon' });
+    try {
+        const { projectId, vendorId, materialName, unit, quantity, unitPrice, photo, remarks } = req.body;
+        const userId = req.user.userId;
+
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                error: 'User not found'
+            });
+        }
+
+        // Verify project is assigned to this site manager
+        if (!user.assignedSites || !user.assignedSites.includes(projectId)) {
+            return res.status(403).json({
+                success: false,
+                error: 'You are not assigned to this project'
+            });
+        }
+
+        const totalPrice = parseFloat(quantity) * parseFloat(unitPrice);
+
+        const newStock = new Stock({
+            projectId,
+            vendorId,
+            materialName,
+            unit,
+            quantity: parseFloat(quantity),
+            unitPrice: parseFloat(unitPrice),
+            totalPrice,
+            photo,
+            remarks,
+            addedBy: userId
+        });
+
+        await newStock.save();
+
+        res.status(201).json({
+            success: true,
+            message: 'Stock added successfully',
+            data: newStock
+        });
+    } catch (error) {
+        next(error);
+    }
 };
 
 const getStocks = async (req, res, next) => {
-    res.json({ success: true, data: [] });
+    try {
+        const userId = req.user.userId;
+        const user = await User.findById(userId);
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                error: 'User not found'
+            });
+        }
+
+        const stocks = await Stock.find({
+            projectId: { $in: user.assignedSites || [] }
+        })
+            .populate('projectId', 'name location')
+            .populate('vendorId', 'name contact')
+            .sort('-createdAt');
+
+        res.json({
+            success: true,
+            data: stocks
+        });
+    } catch (error) {
+        next(error);
+    }
 };
 
 // ============ DAILY REPORT ============
