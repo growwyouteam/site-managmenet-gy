@@ -3,7 +3,7 @@
  * Handles all admin-specific operations with MongoDB
  */
 
-const { User, Project, Vendor, Expense, Labour, Contractor, ContractorPayment, Machine } = require('../models');
+const { User, Project, Vendor, Expense, Labour, Contractor, ContractorPayment, Machine, Stock } = require('../models');
 
 // ============ DASHBOARD ============
 
@@ -676,19 +676,109 @@ const deleteMachine = async (req, res, next) => {
 };
 
 const getStocks = async (req, res, next) => {
-    res.json({ success: true, data: [] });
+    try {
+        const stocks = await Stock.find()
+            .populate('projectId', 'name location')
+            .populate('vendorId', 'name contact')
+            .sort('-createdAt');
+
+        res.json({
+            success: true,
+            data: stocks
+        });
+    } catch (error) {
+        next(error);
+    }
 };
 
 const createStock = async (req, res, next) => {
-    res.json({ success: true, message: 'Feature coming soon' });
+    try {
+        const { projectId, vendorId, materialName, unit, quantity, unitPrice, photo, remarks } = req.body;
+        const userId = req.user.userId;
+
+        const totalPrice = parseFloat(quantity) * parseFloat(unitPrice);
+
+        const newStock = new Stock({
+            projectId,
+            vendorId,
+            materialName,
+            unit,
+            quantity: parseFloat(quantity),
+            unitPrice: parseFloat(unitPrice),
+            totalPrice,
+            photo,
+            remarks,
+            addedBy: userId
+        });
+
+        await newStock.save();
+
+        res.status(201).json({
+            success: true,
+            message: 'Stock added successfully',
+            data: newStock
+        });
+    } catch (error) {
+        next(error);
+    }
 };
 
 const updateStock = async (req, res, next) => {
-    res.json({ success: true, message: 'Feature coming soon' });
+    try {
+        const { id } = req.params;
+        const updates = req.body;
+
+        // Recalculate total price if quantity or unitPrice changed
+        if (updates.quantity || updates.unitPrice) {
+            const stock = await Stock.findById(id);
+            const quantity = updates.quantity || stock.quantity;
+            const unitPrice = updates.unitPrice || stock.unitPrice;
+            updates.totalPrice = parseFloat(quantity) * parseFloat(unitPrice);
+        }
+
+        const stock = await Stock.findByIdAndUpdate(
+            id,
+            updates,
+            { new: true, runValidators: true }
+        );
+
+        if (!stock) {
+            return res.status(404).json({
+                success: false,
+                error: 'Stock not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Stock updated successfully',
+            data: stock
+        });
+    } catch (error) {
+        next(error);
+    }
 };
 
 const deleteStock = async (req, res, next) => {
-    res.json({ success: true, message: 'Feature coming soon' });
+    try {
+        const { id } = req.params;
+
+        const stock = await Stock.findByIdAndDelete(id);
+
+        if (!stock) {
+            return res.status(404).json({
+                success: false,
+                error: 'Stock not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Stock deleted successfully'
+        });
+    } catch (error) {
+        next(error);
+    }
 };
 
 const getTransfers = async (req, res, next) => {
