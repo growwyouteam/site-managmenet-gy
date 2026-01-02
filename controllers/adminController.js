@@ -105,17 +105,16 @@ const getProjectDetail = async (req, res, next) => {
 // Create new project
 const createProject = async (req, res, next) => {
     try {
-        const { name, location, startDate, endDate, budget, assignedManager, description, status } = req.body;
+        const { name, location, budget, startDate, endDate, description, assignedManager } = req.body;
 
         const newProject = new Project({
             name,
             location,
+            budget: parseFloat(budget) || 0,
             startDate,
             endDate,
-            budget: parseFloat(budget) || 0,
-            assignedManager: assignedManager || null,
-            description: description || '',
-            status: status || 'running'
+            description,
+            assignedManager
         });
 
         await newProject.save();
@@ -126,6 +125,20 @@ const createProject = async (req, res, next) => {
                 assignedManager,
                 { $addToSet: { assignedSites: newProject._id } }
             );
+        }
+
+        // Auto-assign new project to ALL existing site managers
+        console.log('🔧 Auto-assigning new project to all site managers...');
+        const allSiteManagers = await User.find({ role: 'sitemanager', active: true });
+
+        if (allSiteManagers.length > 0) {
+            // Add new project to all site managers
+            await User.updateMany(
+                { role: 'sitemanager', active: true },
+                { $addToSet: { assignedSites: newProject._id } }
+            );
+
+            console.log(`✅ Auto-assigned project "${name}" to ${allSiteManagers.length} site managers`);
         }
 
         res.status(201).json({
@@ -144,6 +157,15 @@ const updateProject = async (req, res, next) => {
         const { id } = req.params;
         const updates = req.body;
 
+        // Get the old project to check manager change
+        const oldProject = await Project.findById(id);
+        if (!oldProject) {
+            return res.status(404).json({
+                success: false,
+                error: 'Project not found'
+            });
+        }
+
         const project = await Project.findByIdAndUpdate(
             id,
             updates,
@@ -155,6 +177,28 @@ const updateProject = async (req, res, next) => {
                 success: false,
                 error: 'Project not found'
             });
+        }
+
+        // Handle site manager assignment changes
+        const oldManagerId = oldProject.assignedManager?.toString();
+        const newManagerId = updates.assignedManager;
+
+        if (oldManagerId !== newManagerId) {
+            // Remove project from old manager's assigned sites
+            if (oldManagerId) {
+                await User.findByIdAndUpdate(
+                    oldManagerId,
+                    { $pull: { assignedSites: id } }
+                );
+            }
+
+            // Add project to new manager's assigned sites
+            if (newManagerId) {
+                await User.findByIdAndUpdate(
+                    newManagerId,
+                    { $addToSet: { assignedSites: id } }
+                );
+            }
         }
 
         res.json({
@@ -238,6 +282,23 @@ const createUser = async (req, res, next) => {
         });
 
         await newUser.save();
+
+        // If user is a site manager, automatically assign all existing projects
+        if (newUser.role === 'sitemanager') {
+            console.log('🔧 Auto-assigning all projects to new site manager:', newUser.name);
+
+            // Get all existing projects
+            const allProjects = await Project.find({});
+            if (allProjects.length > 0) {
+                // Assign all project IDs to the new site manager
+                newUser.assignedSites = allProjects.map(project => project._id);
+                await newUser.save();
+
+                console.log(`✅ Assigned ${allProjects.length} projects to site manager ${newUser.name}`);
+            } else {
+                console.log('ℹ️ No projects found to assign');
+            }
+        }
 
         // Remove password from response
         const userResponse = newUser.toObject();
@@ -630,7 +691,9 @@ const createContractorPayment = async (req, res, next) => {
 // Placeholder functions for other features
 const getMachines = async (req, res, next) => {
     try {
-        const machines = await Machine.find().sort('-createdAt');
+        const machines = await Machine.find()
+            .populate('projectId', 'name location')
+            .sort('-createdAt');
         res.json({
             success: true,
             data: machines

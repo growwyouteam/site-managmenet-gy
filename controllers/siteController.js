@@ -20,10 +20,14 @@ const getDashboard = async (req, res, next) => {
             });
         }
 
+        console.log('Site Manager Dashboard - User:', user.name, 'assignedSites:', user.assignedSites);
+
         // Get assigned projects
         const assignedProjects = await Project.find({
             _id: { $in: user.assignedSites || [] }
         });
+
+        console.log('Found assigned projects:', assignedProjects.length);
 
         // Get labour count
         const labourCount = await Labour.countDocuments({
@@ -47,6 +51,7 @@ const getDashboard = async (req, res, next) => {
             }
         });
     } catch (error) {
+        console.error('Error in site manager dashboard:', error);
         next(error);
     }
 };
@@ -217,18 +222,32 @@ const getStocks = async (req, res, next) => {
             });
         }
 
+        console.log('🔍 Site Manager Stocks - User:', user.name, 'assignedSites:', user.assignedSites);
+
+        // Check if user has assigned sites
+        if (!user.assignedSites || user.assignedSites.length === 0) {
+            console.log('ℹ️ No assigned sites for site manager, returning empty stocks');
+            return res.json({
+                success: true,
+                data: []
+            });
+        }
+
         const stocks = await Stock.find({
-            projectId: { $in: user.assignedSites || [] }
+            projectId: { $in: user.assignedSites }
         })
             .populate('projectId', 'name location')
             .populate('vendorId', 'name contact')
             .sort('-createdAt');
+
+        console.log(`✅ Found ${stocks.length} stocks for site manager ${user.name}`);
 
         res.json({
             success: true,
             data: stocks
         });
     } catch (error) {
+        console.error('❌ Error in getStocks:', error);
         next(error);
     }
 };
@@ -397,15 +416,29 @@ const getProjects = async (req, res, next) => {
             });
         }
 
+        console.log('🔍 Site Manager Projects - User:', user.name, 'assignedSites:', user.assignedSites);
+
+        // Check if user has assigned sites
+        if (!user.assignedSites || user.assignedSites.length === 0) {
+            console.log('ℹ️ No assigned sites for site manager, returning empty projects');
+            return res.json({
+                success: true,
+                data: []
+            });
+        }
+
         const projects = await Project.find({
-            _id: { $in: user.assignedSites || [] }
+            _id: { $in: user.assignedSites }
         });
+
+        console.log(`✅ Found ${projects.length} projects for site manager ${user.name}`);
 
         res.json({
             success: true,
             data: projects
         });
     } catch (error) {
+        console.error('❌ Error in getProjects:', error);
         next(error);
     }
 };
