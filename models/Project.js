@@ -48,4 +48,15 @@ const projectSchema = new mongoose.Schema({
     timestamps: true
 });
 
+// Performance indexes for production
+projectSchema.index({ status: 1 });
+projectSchema.index({ createdAt: -1 });
+projectSchema.index({ assignedManager: 1 });
+projectSchema.index({ budget: 1 });
+projectSchema.index({ startDate: 1, endDate: 1 });
+
+// Compound indexes for common queries
+projectSchema.index({ status: 1, createdAt: -1 });
+projectSchema.index({ assignedManager: 1, status: 1 });
+
 module.exports = mongoose.model('Project', projectSchema);
