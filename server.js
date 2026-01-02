@@ -14,8 +14,8 @@ const socketIO = require('socket.io');
 const multer = require('multer');
 const fs = require('fs');
 
-// Import MongoDB connection
-const connectDB = require('./config/database');
+// Import MongoDB connection with fallback
+const connectDB = require('./config/database-fallback');
 
 // Connect to MongoDB
 connectDB();
