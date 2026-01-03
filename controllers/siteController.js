@@ -3,7 +3,7 @@
  * Handles all site manager-specific operations with MongoDB
  */
 
-const { User, Project, Vendor, Expense, Labour, Stock, Attendance } = require('../models');
+const { User, Project, Vendor, Expense, Labour, Stock } = require('../models');
 
 // ============ DASHBOARD ============
 
@@ -59,104 +59,11 @@ const getDashboard = async (req, res, next) => {
 // ============ ATTENDANCE ============
 
 const markAttendance = async (req, res, next) => {
-    try {
-        const userId = req.user.userId;
-        const { date, projectId, photo, remarks } = req.body;
-
-        // Validate required fields
-        if (!date || !projectId || !photo) {
-            return res.status(400).json({
-                success: false,
-                error: 'Date, project, and photo are required'
-            });
-        }
-
-        // Check if user has access to this project
-        const user = await User.findById(userId);
-        if (!user || !user.assignedSites.includes(projectId)) {
-            return res.status(403).json({
-                success: false,
-                error: 'You do not have access to this project'
-            });
-        }
-
-        // Check if attendance already marked for today
-        const existingAttendance = await Attendance.findOne({
-            userId: userId,
-            date: date,
-            projectId: projectId,
-            attendanceType: 'site_manager'
-        });
-
-        if (existingAttendance) {
-            return res.status(400).json({
-                success: false,
-                error: 'Attendance already marked for this project today'
-            });
-        }
-
-        // Create attendance record
-        const attendance = new Attendance({
-            userId: userId,
-            date: date,
-            projectId: projectId,
-            photo: photo,
-            remarks: remarks || '',
-            time: new Date(),
-            attendanceType: 'site_manager',
-            markedBy: userId
-        });
-
-        await attendance.save();
-
-        console.log(`✅ Site Manager Attendance marked for user ${user.name} on ${date}`);
-
-        res.status(201).json({
-            success: true,
-            message: 'Attendance marked successfully',
-            data: attendance
-        });
-    } catch (error) {
-        console.error('❌ Error marking attendance:', error);
-        next(error);
-    }
+    res.json({ success: true, message: 'Feature coming soon' });
 };
 
 const getMyAttendance = async (req, res, next) => {
-    try {
-        const userId = req.user.userId;
-        const user = await User.findById(userId).select('name assignedSites');
-
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                error: 'User not found'
-            });
-        }
-
-        console.log('🔍 Getting attendance for site manager:', user.name);
-
-        // Get attendance records for user's assigned projects
-        const attendance = await Attendance.find({
-            userId: userId,
-            attendanceType: 'site_manager',
-            projectId: { $in: user.assignedSites || [] }
-        })
-            .select('date projectId time remarks status workHours')
-            .populate('projectId', 'name location')
-            .sort({ date: -1 })
-            .lean(); // Lean query for better performance
-
-        console.log(`✅ Found ${attendance.length} attendance records for ${user.name}`);
-
-        res.json({
-            success: true,
-            data: attendance
-        });
-    } catch (error) {
-        console.error('❌ Error getting attendance:', error);
-        next(error);
-    }
+    res.json({ success: true, data: [] });
 };
 
 // ============ LABOUR ============

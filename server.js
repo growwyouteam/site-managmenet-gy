@@ -10,6 +10,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const path = require('path');
 const http = require('http');
+const compression = require('compression');
 const socketIO = require('socket.io');
 const multer = require('multer');
 const fs = require('fs');
@@ -57,6 +58,9 @@ if (!fs.existsSync(uploadsDir)) {
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
+
+// Compress all responses
+app.use(compression());
 
 // CORS configuration
 app.use(cors({

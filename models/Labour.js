@@ -45,4 +45,8 @@ const labourSchema = new mongoose.Schema({
     timestamps: true
 });
 
+// Add indexes for frequent queries
+labourSchema.index({ active: 1 });
+labourSchema.index({ assignedSite: 1 });
+
 module.exports = mongoose.model('Labour', labourSchema);

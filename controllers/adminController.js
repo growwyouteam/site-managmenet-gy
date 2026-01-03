@@ -9,20 +9,40 @@ const { User, Project, Vendor, Expense, Labour, Contractor, ContractorPayment, M
 // ============ DASHBOARD ============
 
 // Get dashboard summary
+// Get dashboard summary
 const getDashboard = async (req, res, next) => {
     try {
-        const totalProjects = await Project.countDocuments();
-        const runningProjects = await Project.countDocuments({ status: 'running' });
-        const completedProjects = await Project.countDocuments({ status: 'completed' });
-        const totalSiteManagers = await User.countDocuments({ role: 'sitemanager', active: true });
-        const totalLabours = await Labour.countDocuments({ active: true });
+        console.log('🚀 Fetching dashboard summary...');
+        const startTime = Date.now();
 
-        const expensesResult = await Expense.aggregate([
-            { $group: { _id: null, total: { $sum: '$amount' } } }
+        // Run independent queries in parallel
+        const [
+            totalProjects,
+            runningProjects,
+            completedProjects,
+            totalSiteManagers,
+            totalLabours,
+            expensesResult,
+            projects
+        ] = await Promise.all([
+            Project.estimatedDocumentCount(), // Faster than countDocuments
+            Project.countDocuments({ status: 'running' }),
+            Project.countDocuments({ status: 'completed' }),
+            User.countDocuments({ role: 'sitemanager', active: true }),
+            Labour.countDocuments({ active: true }),
+            Expense.aggregate([
+                { $group: { _id: null, total: { $sum: '$amount' } } }
+            ]),
+            Project.find()
+                .select('name location status budget expenses assignedManager') // Select only needed fields
+                .populate('assignedManager', 'name email')
+                .lean() // Plain JavaScript objects, faster
+                .limit(10) // Limit potential massive list on dashboard
         ]);
+
         const totalExpenses = expensesResult.length > 0 ? expensesResult[0].total : 0;
 
-        const projects = await Project.find().populate('assignedManager', 'name email');
+        console.log(`⚡ Dashboard data fetched in ${Date.now() - startTime}ms`);
 
         res.json({
             success: true,
@@ -46,7 +66,10 @@ const getDashboard = async (req, res, next) => {
 // Get all projects
 const getProjects = async (req, res, next) => {
     try {
-        const projects = await Project.find().populate('assignedManager', 'name email').sort('-createdAt');
+        const projects = await Project.find()
+            .populate('assignedManager', 'name email')
+            .sort('-createdAt')
+            .lean();
         res.json({
             success: true,
             data: projects
@@ -77,7 +100,9 @@ const getProjectDetail = async (req, res, next) => {
             });
         }
 
-        const project = await Project.findById(id).populate('assignedManager', 'name email');
+        const project = await Project.findById(id)
+            .populate('assignedManager', 'name email')
+            .lean();
 
         if (!project) {
             return res.status(404).json({
@@ -86,8 +111,8 @@ const getProjectDetail = async (req, res, next) => {
             });
         }
 
-        const expenses = await Expense.find({ projectId: id });
-        const labours = await Labour.find({ assignedSite: id });
+        const expenses = await Expense.find({ projectId: id }).lean();
+        const labours = await Labour.find({ assignedSite: id }).lean();
 
         res.json({
             success: true,
@@ -245,7 +270,8 @@ const getUsers = async (req, res, next) => {
     try {
         const users = await User.find({ role: 'sitemanager' })
             .select('-password')
-            .sort('-createdAt');
+            .sort('-createdAt')
+            .lean();
 
         res.json({
             success: true,
@@ -379,7 +405,7 @@ const deleteUser = async (req, res, next) => {
 // Get all vendors
 const getVendors = async (req, res, next) => {
     try {
-        const vendors = await Vendor.find().sort('-createdAt');
+        const vendors = await Vendor.find().sort('-createdAt').lean();
         res.json({
             success: true,
             data: vendors
@@ -500,7 +526,8 @@ const getExpenses = async (req, res, next) => {
         const expenses = await Expense.find()
             .populate('projectId', 'name location')
             .populate('addedBy', 'name email')
-            .sort('-createdAt');
+            .sort('-createdAt')
+            .lean();
 
         res.json({
             success: true,
@@ -583,7 +610,8 @@ const getLabours = async (req, res, next) => {
         const labours = await Labour.find()
             .populate('assignedSite', 'name location')
             .populate('enrolledBy', 'name email')
-            .sort('-createdAt');
+            .sort('-createdAt')
+            .lean();
 
         res.json({
             success: true,
@@ -598,7 +626,7 @@ const getLabours = async (req, res, next) => {
 
 const getContractors = async (req, res, next) => {
     try {
-        const contractors = await Contractor.find().sort('-createdAt');
+        const contractors = await Contractor.find().sort('-createdAt').lean();
         res.json({
             success: true,
             data: contractors
@@ -664,7 +692,7 @@ const deleteContractor = async (req, res, next) => {
 const getContractorPayments = async (req, res, next) => {
     try {
         const { contractorId } = req.params;
-        const payments = await ContractorPayment.find({ contractorId }).sort('-createdAt');
+        const payments = await ContractorPayment.find({ contractorId }).sort('-createdAt').lean();
         res.json({
             success: true,
             data: payments
@@ -693,7 +721,8 @@ const getMachines = async (req, res, next) => {
     try {
         const machines = await Machine.find()
             .populate('projectId', 'name location')
-            .sort('-createdAt');
+            .sort('-createdAt')
+            .lean();
         res.json({
             success: true,
             data: machines
@@ -763,7 +792,7 @@ const getStocks = async (req, res, next) => {
 
         // Get stocks without any population for maximum speed
         const stocks = await Stock.find()
-            .select('materialName unit quantity unitPrice totalPrice remarks createdAt')
+            .select('projectId vendorId materialName unit quantity unitPrice totalPrice remarks createdAt')
             .sort('-createdAt')
             .lean()
             .maxTimeMS(2000); // 2 second timeout

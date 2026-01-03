@@ -42,31 +42,23 @@ const userSchema = new mongoose.Schema({
     },
     assignedSites: [{
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'Project',
-        index: true
+        ref: 'Project'
     }],
     active: {
         type: Boolean,
-        default: true,
-        index: true
+        default: true
     },
     userId: {
         type: String,
-        unique: true,
-        index: true
+        unique: true
     }
 }, {
     timestamps: true
 });
 
-// Performance indexes for production
+// Add indexes for frequent queries
 userSchema.index({ role: 1, active: 1 });
-userSchema.index({ email: 1 }, { unique: true });
-userSchema.index({ createdAt: -1 });
-userSchema.index({ assignedSites: 1 });
-
-// Compound indexes for common queries
-userSchema.index({ role: 1, active: 1, createdAt: -1 });
+userSchema.index({ email: 1 });
 
 // Hash password before saving
 userSchema.pre('save', async function (next) {

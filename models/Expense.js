@@ -41,4 +41,8 @@ const expenseSchema = new mongoose.Schema({
     timestamps: true
 });
 
+// Add indexes for frequent queries
+expenseSchema.index({ projectId: 1 });
+expenseSchema.index({ category: 1 });
+
 module.exports = mongoose.model('Expense', expenseSchema);

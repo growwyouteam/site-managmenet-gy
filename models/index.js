@@ -11,6 +11,5 @@ module.exports = {
     Contractor: require('./Contractor'),
     ContractorPayment: require('./ContractorPayment'),
     Machine: require('./Machine'),
-    Stock: require('./Stock'),
-    Attendance: require('./Attendance')
+    Stock: require('./Stock')
 };
