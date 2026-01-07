@@ -139,7 +139,9 @@ const createProject = async (req, res, next) => {
             startDate,
             endDate,
             description,
-            assignedManager
+            assignedManager,
+            roadDistanceValue: parseFloat(req.body.roadDistanceValue) || 0,
+            roadDistanceUnit: req.body.roadDistanceUnit || 'km'
         });
 
         await newProject.save();
@@ -626,7 +628,10 @@ const getLabours = async (req, res, next) => {
 
 const getContractors = async (req, res, next) => {
     try {
-        const contractors = await Contractor.find().sort('-createdAt').lean();
+        const contractors = await Contractor.find()
+            .populate('assignedProjects', 'name')
+            .sort('-createdAt')
+            .lean();
         res.json({
             success: true,
             data: contractors

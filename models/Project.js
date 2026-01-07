@@ -43,6 +43,15 @@ const projectSchema = new mongoose.Schema({
     description: {
         type: String,
         trim: true
+    },
+    roadDistanceValue: {
+        type: Number,
+        default: 0
+    },
+    roadDistanceUnit: {
+        type: String,
+        enum: ['km', 'm'],
+        default: 'km'
     }
 }, {
     timestamps: true

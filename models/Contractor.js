@@ -27,7 +27,11 @@ const contractorSchema = new mongoose.Schema({
     expensePerUnit: {
         type: Number,
         required: true
-    }
+    },
+    assignedProjects: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Project'
+    }]
 }, {
     timestamps: true
 });
