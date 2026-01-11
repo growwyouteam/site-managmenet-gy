@@ -79,8 +79,8 @@ const expenseValidation = [
 // Machine validation
 const machineValidation = [
   body('name').trim().notEmpty().withMessage('Machine name is required'),
-  body('category').isIn(['big', 'lab', 'consumable', 'equipments']).withMessage('Invalid category'),
-  body('quantity').isNumeric().withMessage('Quantity must be a number'),
+  body('category').isIn(['big', 'lab', 'consumables', 'equipment']).withMessage('Invalid category'),
+  body('quantity').optional(),  // Make quantity optional since consumables use text, machines use numbers
   validate
 ];
 

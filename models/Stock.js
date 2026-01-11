@@ -57,4 +57,7 @@ const stockSchema = new mongoose.Schema({
     timestamps: true
 });
 
+stockSchema.index({ projectId: 1, createdAt: -1 });
+stockSchema.index({ vendorId: 1 });
+
 module.exports = mongoose.model('Stock', stockSchema);

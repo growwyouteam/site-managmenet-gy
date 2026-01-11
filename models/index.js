@@ -8,8 +8,16 @@ module.exports = {
     Vendor: require('./Vendor'),
     Expense: require('./Expense'),
     Labour: require('./Labour'),
+    LabourAttendance: require('./LabourAttendance'),
+    LabourPayment: require('./LabourPayment'),
     Contractor: require('./Contractor'),
     ContractorPayment: require('./ContractorPayment'),
     Machine: require('./Machine'),
-    Stock: require('./Stock')
+    Stock: require('./Stock'),
+    StockOut: require('./StockOut'),
+    Transfer: require('./Transfer'),
+    DailyReport: require('./DailyReport'),
+    LabEquipment: require('./LabEquipment'),
+    ConsumableGoods: require('./ConsumableGoods'),
+    Equipment: require('./Equipment')
 };

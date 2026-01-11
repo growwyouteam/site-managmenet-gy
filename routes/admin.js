@@ -6,6 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { isAuthenticated, isAdmin } = require('../middleware/auth');
+const { uploadSingle } = require('../middleware/upload');
 const {
   projectValidation,
   userValidation,
@@ -48,6 +49,8 @@ const {
   deleteContractor,
   getContractorPayments,
   createContractorPayment,
+  assignContractorToRoad,
+  getContractorRoadAssignments,
   getTransfers,
   createTransfer,
   getAccounts,
@@ -56,10 +59,17 @@ const {
   generateReport,
   getAttendance,
   getLabourAttendance,
+  getLabourPayments,
   getNotifications,
   sendNotification,
   markNotificationRead,
-  getLabours
+  getLabours,
+  addLabEquipment,
+  getLabEquipments,
+  addConsumableGoods,
+  getConsumableGoods,
+  addEquipment,
+  getEquipments
 } = require('../controllers/adminController');
 
 // Apply authentication and admin middleware to all routes
@@ -78,13 +88,13 @@ router.delete('/projects/:id', deleteProject);
 
 // Machines
 router.get('/machines', getMachines);
-router.post('/machines', machineValidation, createMachine);
+router.post('/machines', uploadSingle, machineValidation, createMachine);
 router.put('/machines/:id', updateMachine);
 router.delete('/machines/:id', deleteMachine);
 
 // Stock
 router.get('/stocks', getStocks);
-router.post('/stocks', stockValidation, createStock);
+router.post('/stocks', uploadSingle, stockValidation, createStock);
 router.put('/stocks/:id', updateStock);
 router.delete('/stocks/:id', deleteStock);
 
@@ -132,6 +142,18 @@ router.get('/labour-attendance', getLabourAttendance);
 
 // Labours
 router.get('/labours', getLabours);
+
+// Lab Equipment
+router.get('/lab-equipments', getLabEquipments);
+router.post('/lab-equipments', addLabEquipment);
+
+// Consumable Goods
+router.get('/consumable-goods', getConsumableGoods);
+router.post('/consumable-goods', addConsumableGoods);
+
+// Equipment
+router.get('/equipments', getEquipments);
+router.post('/equipments', addEquipment);
 
 // Notifications
 router.get('/notifications', getNotifications);

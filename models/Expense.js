@@ -33,6 +33,10 @@ const expenseSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    receipt: {
+        type: String,
+        trim: true
+    },
     addedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'

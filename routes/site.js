@@ -6,6 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { isAuthenticated, isSiteManager } = require('../middleware/auth');
+const { uploadSingle } = require('../middleware/upload');
 const {
   labourValidation,
   attendanceValidation,
@@ -23,6 +24,8 @@ const {
   getLabourAttendance,
   addStockIn,
   getStocks,
+  recordStockOut,
+  getStockOuts,
   submitDailyReport,
   getDailyReports,
   uploadGalleryImages,
@@ -37,7 +40,12 @@ const {
   markNotificationRead,
   getProfile,
   getVendors,
-  getProjects
+  getProjects,
+  getMachines,
+  getMaterials,
+  getLabEquipments,
+  getConsumableGoods,
+  getEquipments
 } = require('../controllers/siteController');
 
 // Apply authentication and site manager middleware to all routes
@@ -61,11 +69,15 @@ router.post('/labour-attendance', markLabourAttendance);
 router.get('/labour-attendance', getLabourAttendance);
 
 // Stock In
-router.post('/stock-in', addStockIn);
+router.post('/stock-in', uploadSingle, addStockIn);
 router.get('/stocks', getStocks);
 
+// Stock Out
+router.post('/stock-out', recordStockOut);
+router.get('/stock-outs', getStockOuts);
+
 // Daily Report
-router.post('/daily-report', submitDailyReport);
+router.post('/daily-reports', submitDailyReport);
 router.get('/daily-reports', getDailyReports);
 
 // Gallery
@@ -73,7 +85,7 @@ router.post('/gallery', uploadGalleryImages);
 router.get('/gallery', getGalleryImages);
 
 // Expenses
-router.post('/expenses', expenseValidation, addExpense);
+router.post('/expenses', uploadSingle, expenseValidation, addExpense);
 router.get('/expenses', getExpenses);
 
 // Transfer
@@ -81,7 +93,7 @@ router.post('/transfer', requestTransfer);
 router.get('/transfers', getTransfers);
 
 // Payment
-router.post('/payment', payLabour);
+router.post('/payments', payLabour); // Changed to plural to match frontend
 router.get('/payments', getPayments);
 
 // Notifications
@@ -96,5 +108,20 @@ router.get('/vendors', getVendors);
 
 // Projects (assigned)
 router.get('/projects', getProjects);
+
+// Machines (assigned)
+router.get('/machines', getMachines);
+
+// Materials (for transfer dropdown)
+router.get('/materials', getMaterials);
+
+// Lab Equipment
+router.get('/lab-equipments', getLabEquipments);
+
+// Consumable Goods
+router.get('/consumable-goods', getConsumableGoods);
+
+// Equipment
+router.get('/equipments', getEquipments);
 
 module.exports = router;

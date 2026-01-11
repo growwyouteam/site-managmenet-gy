@@ -4,7 +4,7 @@
  */
 
 const mongoose = require('mongoose');
-const { User, Project, Vendor, Expense, Labour, Contractor, ContractorPayment, Machine, Stock } = require('../models');
+const { User, Project, Vendor, Expense, Labour, Contractor, ContractorPayment, Machine, Stock, LabEquipment, ConsumableGoods, Equipment } = require('../models');
 
 // ============ DASHBOARD ============
 
@@ -111,15 +111,25 @@ const getProjectDetail = async (req, res, next) => {
             });
         }
 
-        const expenses = await Expense.find({ projectId: id }).lean();
-        const labours = await Labour.find({ assignedSite: id }).lean();
+        // Optimize: Fetch related data in parallel with specific project ID filters
+        // This avoids fetching the entire collection and filtering in memory or frontend
+        const [expenses, labours, stocks, machines, contractors] = await Promise.all([
+            Expense.find({ projectId: id }).lean(),
+            Labour.find({ assignedSite: id }).lean(),
+            Stock.find({ projectId: id }).sort('-createdAt').lean(),
+            Machine.find({ projectId: id }).sort('-createdAt').lean(),
+            Contractor.find({ assignedProjects: id }).lean()
+        ]);
 
         res.json({
             success: true,
             data: {
                 project,
                 expenses,
-                labours
+                labours,
+                stocks,
+                machines,
+                contractors
             }
         });
     } catch (error) {
@@ -739,7 +749,19 @@ const getMachines = async (req, res, next) => {
 
 const createMachine = async (req, res, next) => {
     try {
-        const machine = new Machine(req.body);
+        // Upload photo to Cloudinary if file exists
+        let machinePhotoUrl = null;
+        if (req.file) {
+            const { uploadToCloudinary } = require('../config/cloudinary');
+            machinePhotoUrl = await uploadToCloudinary(req.file.buffer, 'machines');
+        }
+
+        const machineData = {
+            ...req.body,
+            machinePhoto: machinePhotoUrl || req.body.machinePhoto
+        };
+
+        const machine = new Machine(machineData);
         await machine.save();
         res.status(201).json({
             success: true,
@@ -822,10 +844,17 @@ const getStocks = async (req, res, next) => {
 
 const createStock = async (req, res, next) => {
     try {
-        const { projectId, vendorId, materialName, unit, quantity, unitPrice, photo, remarks } = req.body;
+        const { projectId, vendorId, materialName, unit, quantity, unitPrice, remarks } = req.body;
         const userId = req.user.userId;
 
         const totalPrice = parseFloat(quantity) * parseFloat(unitPrice);
+
+        // Upload photo to Cloudinary if file exists
+        let photoUrl = null;
+        if (req.file) {
+            const { uploadToCloudinary } = require('../config/cloudinary');
+            photoUrl = await uploadToCloudinary(req.file.buffer, 'stock');
+        }
 
         const newStock = new Stock({
             projectId,
@@ -835,12 +864,25 @@ const createStock = async (req, res, next) => {
             quantity: parseFloat(quantity),
             unitPrice: parseFloat(unitPrice),
             totalPrice,
-            photo,
+            photo: photoUrl,
             remarks,
             addedBy: userId
         });
 
         await newStock.save();
+
+        // Update vendor's totalSupplied and pendingAmount
+        if (vendorId) {
+            await Vendor.findByIdAndUpdate(
+                vendorId,
+                {
+                    $inc: {
+                        totalSupplied: totalPrice,
+                        pendingAmount: totalPrice
+                    }
+                }
+            );
+        }
 
         res.status(201).json({
             success: true,
@@ -1121,4 +1163,198 @@ module.exports = {
     sendNotification,
     markNotificationRead,
     getLabours
+};
+
+// ============ LAB EQUIPMENT ============
+
+const addLabEquipment = async (req, res, next) => {
+    try {
+        const { projectId, name, category, quantity, status, serialNumber, purchaseDate, remarks } = req.body;
+
+        const labEquipment = await LabEquipment.create({
+            projectId,
+            name,
+            category,
+            quantity: quantity || 1,
+            status: status || 'active',
+            serialNumber,
+            purchaseDate,
+            remarks
+        });
+
+        console.log(`✅ Lab Equipment added: ${name}`);
+
+        res.status(201).json({
+            success: true,
+            message: 'Lab equipment added successfully',
+            data: labEquipment
+        });
+    } catch (error) {
+        console.error('❌ Error adding lab equipment:', error);
+        next(error);
+    }
+};
+
+const getLabEquipments = async (req, res, next) => {
+    try {
+        const labEquipments = await LabEquipment.find()
+            .populate('projectId', 'name location')
+            .sort('-createdAt')
+            .lean();
+
+        res.json({
+            success: true,
+            data: labEquipments
+        });
+    } catch (error) {
+        console.error('❌ Error fetching lab equipments:', error);
+        next(error);
+    }
+};
+
+// ============ CONSUMABLE GOODS ============
+
+const addConsumableGoods = async (req, res, next) => {
+    try {
+        const { projectId, name, category, quantity, unit, minStockLevel, expiryDate, remarks } = req.body;
+
+        const consumableGoods = await ConsumableGoods.create({
+            projectId,
+            name,
+            category,
+            quantity,
+            unit,
+            minStockLevel: minStockLevel || 0,
+            expiryDate,
+            remarks
+        });
+
+        console.log(`✅ Consumable Goods added: ${name}`);
+
+        res.status(201).json({
+            success: true,
+            message: 'Consumable goods added successfully',
+            data: consumableGoods
+        });
+    } catch (error) {
+        console.error('❌ Error adding consumable goods:', error);
+        next(error);
+    }
+};
+
+const getConsumableGoods = async (req, res, next) => {
+    try {
+        const consumableGoods = await ConsumableGoods.find()
+            .populate('projectId', 'name location')
+            .sort('-createdAt')
+            .lean();
+
+        res.json({
+            success: true,
+            data: consumableGoods
+        });
+    } catch (error) {
+        console.error('❌ Error fetching consumable goods:', error);
+        next(error);
+    }
+};
+
+// ============ EQUIPMENT ============
+
+const addEquipment = async (req, res, next) => {
+    try {
+        const { projectId, name, category, quantity, status, serialNumber, purchaseDate, remarks } = req.body;
+
+        const equipment = await Equipment.create({
+            projectId,
+            name,
+            category,
+            quantity: quantity || 1,
+            status: status || 'active',
+            serialNumber,
+            purchaseDate,
+            remarks
+        });
+
+        console.log(`✅ Equipment added: ${name}`);
+
+        res.status(201).json({
+            success: true,
+            message: 'Equipment added successfully',
+            data: equipment
+        });
+    } catch (error) {
+        console.error('❌ Error adding equipment:', error);
+        next(error);
+    }
+};
+
+const getEquipments = async (req, res, next) => {
+    try {
+        const equipments = await Equipment.find()
+            .populate('projectId', 'name location')
+            .sort('-createdAt')
+            .lean();
+
+        res.json({
+            success: true,
+            data: equipments
+        });
+    } catch (error) {
+        console.error('❌ Error fetching equipments:', error);
+        next(error);
+    }
+};
+
+module.exports = {
+    getDashboard,
+    getProjects,
+    createProject,
+    updateProject,
+    deleteProject,
+    getProjectDetail,
+    getMachines,
+    createMachine,
+    updateMachine,
+    deleteMachine,
+    getStocks,
+    createStock,
+    updateStock,
+    deleteStock,
+    getVendors,
+    createVendor,
+    updateVendor,
+    deleteVendor,
+    recordVendorPayment,
+    getExpenses,
+    createExpense,
+    deleteExpense,
+    getUsers,
+    createUser,
+    updateUser,
+    deleteUser,
+    getContractors,
+    createContractor,
+    updateContractor,
+    deleteContractor,
+    getContractorPayments,
+    createContractorPayment,
+    getTransfers,
+    createTransfer,
+    getAccounts,
+    addCapital,
+    addTransaction,
+    generateReport,
+    getAttendance,
+    getLabourAttendance,
+    getNotifications,
+    sendNotification,
+    markNotificationRead,
+    getLabours,
+    addLabEquipment,
+    getLabEquipments,
+    addConsumableGoods,
+    getConsumableGoods,
+    addEquipment,
+    getEquipments
 };
