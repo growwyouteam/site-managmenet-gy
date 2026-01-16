@@ -35,6 +35,10 @@ const vendorSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    advancePayment: {
+        type: Number,
+        default: 0
+    },
     vendorId: {
         type: String,
         unique: true

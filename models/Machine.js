@@ -25,7 +25,7 @@ const machineSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['available', 'in-use', 'maintenance'],
+        enum: ['available', 'in-use', 'maintenance', 'returned'],
         default: 'available'
     },
     ownershipType: {
@@ -61,9 +61,24 @@ const machineSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    rentalType: {
+        type: String,
+        enum: ['perDay', 'perHour'],
+        default: 'perDay'
+    },
+    assignedAt: {
+        type: Date
+    },
     assignedToContractor: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Contractor'
+    },
+    returnedAt: {
+        type: Date
+    },
+    totalRentPaid: {
+        type: Number,
+        default: 0
     }
 }, {
     timestamps: true

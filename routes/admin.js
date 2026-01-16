@@ -6,7 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { isAuthenticated, isAdmin } = require('../middleware/auth');
-const { uploadSingle } = require('../middleware/upload');
+const { uploadSingle, uploadReceipt } = require('../middleware/upload');
 const {
   projectValidation,
   userValidation,
@@ -27,6 +27,7 @@ const {
   createMachine,
   updateMachine,
   deleteMachine,
+  returnRentedMachine,
   getStocks,
   createStock,
   updateStock,
@@ -36,6 +37,7 @@ const {
   updateVendor,
   deleteVendor,
   recordVendorPayment,
+  getVendorPayments,
   getExpenses,
   createExpense,
   deleteExpense,
@@ -69,7 +71,8 @@ const {
   addConsumableGoods,
   getConsumableGoods,
   addEquipment,
-  getEquipments
+  getEquipments,
+  allocateFunds
 } = require('../controllers/adminController');
 
 // Apply authentication and admin middleware to all routes
@@ -91,6 +94,7 @@ router.get('/machines', getMachines);
 router.post('/machines', uploadSingle, machineValidation, createMachine);
 router.put('/machines/:id', updateMachine);
 router.delete('/machines/:id', deleteMachine);
+router.post('/machines/:id/return', returnRentedMachine);
 
 // Stock
 router.get('/stocks', getStocks);
@@ -103,7 +107,8 @@ router.get('/vendors', getVendors);
 router.post('/vendors', vendorValidation, createVendor);
 router.put('/vendors/:id', updateVendor);
 router.delete('/vendors/:id', deleteVendor);
-router.post('/vendors/payment', recordVendorPayment);
+router.post('/vendors/payment', uploadReceipt, recordVendorPayment);
+router.get('/vendors/:vendorId/payments', getVendorPayments);
 
 // Expenses
 router.get('/expenses', getExpenses);
@@ -132,6 +137,7 @@ router.post('/transfers', createTransfer);
 router.get('/accounts', getAccounts);
 router.post('/accounts/capital', addCapital);
 router.post('/accounts/transaction', addTransaction);
+router.post('/accounts/allocate', allocateFunds);
 
 // Reports
 router.get('/reports', generateReport);

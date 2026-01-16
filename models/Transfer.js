@@ -4,7 +4,7 @@ const transferSchema = new mongoose.Schema({
     type: {
         type: String,
         required: true,
-        enum: ['labour', 'machine', 'stock']
+        enum: ['labour', 'machine', 'stock', 'lab-equipment', 'consumable-goods', 'equipment']
     },
     fromProject: {
         type: mongoose.Schema.Types.ObjectId,

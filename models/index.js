@@ -6,6 +6,7 @@ module.exports = {
     User: require('./User'),
     Project: require('./Project'),
     Vendor: require('./Vendor'),
+    VendorPayment: require('./VendorPayment'),
     Expense: require('./Expense'),
     Labour: require('./Labour'),
     LabourAttendance: require('./LabourAttendance'),
@@ -19,5 +20,6 @@ module.exports = {
     DailyReport: require('./DailyReport'),
     LabEquipment: require('./LabEquipment'),
     ConsumableGoods: require('./ConsumableGoods'),
-    Equipment: require('./Equipment')
+    Equipment: require('./Equipment'),
+    Transaction: require('./Transaction')
 };

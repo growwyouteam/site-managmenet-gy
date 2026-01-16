@@ -321,6 +321,7 @@ const addStockIn = async (req, res, next) => {
 const getStocks = async (req, res, next) => {
     try {
         const userId = req.user.userId;
+        const { startDate, endDate, vendorId } = req.query;
         const user = await User.findById(userId);
 
         if (!user) {
@@ -341,14 +342,39 @@ const getStocks = async (req, res, next) => {
             });
         }
 
-        const stocks = await Stock.find({
+        // Build query
+        const query = {
             projectId: { $in: user.assignedSites }
-        })
+        };
+
+        if (vendorId && vendorId !== 'all') {
+            query.vendorId = vendorId;
+        }
+
+        if (startDate || endDate) {
+            query.createdAt = {};
+            if (startDate) {
+                query.createdAt.$gte = new Date(startDate);
+            }
+            if (endDate) {
+                // Set end date to end of day
+                const end = new Date(endDate);
+                end.setHours(23, 59, 59, 999);
+                query.createdAt.$lte = end;
+            }
+        }
+
+        // Increase limit if filtering, otherwise default to 50 (restored from 10)
+        // If filtering is applied, we usually want to see all results
+        const limit = (startDate || endDate || (vendorId && vendorId !== 'all')) ? 1000 : 50;
+
+        const stocks = await Stock.find(query)
             .populate('projectId', 'name location')
             .populate('vendorId', 'name contact')
+            .populate('addedBy', 'name') // Populate the adder's name
             .sort('-createdAt')
-            .limit(10) // Reduced from 50 to 10 to improve load time with base64 images
-            .lean(); // Use lean() for performance
+            .limit(limit)
+            .lean();
 
         console.log(`✅ Found ${stocks.length} stocks for site manager ${user.name}`);
 
@@ -565,8 +591,8 @@ const requestTransfer = async (req, res, next) => {
         if (type === 'labour') {
             if (!itemId) return res.status(400).json({ success: false, error: 'Labour is required' });
             transferData.labourId = itemId;
-        } else if (type === 'machine') {
-            if (!itemId) return res.status(400).json({ success: false, error: 'Machine is required' });
+        } else if (type === 'machine' || type === 'lab-equipment' || type === 'consumable-goods' || type === 'equipment') {
+            if (!itemId) return res.status(400).json({ success: false, error: 'Item is required' });
             transferData.machineId = itemId;
         } else if (type === 'stock') {
             if (!itemId) return res.status(400).json({ success: false, error: 'Material name is required' });
@@ -1125,8 +1151,9 @@ const getLabEquipments = async (req, res, next) => {
             return res.json({ success: true, data: [] });
         }
 
-        const labEquipments = await LabEquipment.find({
-            projectId: { $in: user.assignedSites }
+        const labEquipments = await Machine.find({
+            projectId: { $in: user.assignedSites },
+            category: 'lab'
         }).populate('projectId', 'name').lean();
 
         res.json({ success: true, data: labEquipments });
@@ -1145,8 +1172,9 @@ const getConsumableGoods = async (req, res, next) => {
             return res.json({ success: true, data: [] });
         }
 
-        const consumableGoods = await ConsumableGoods.find({
-            projectId: { $in: user.assignedSites }
+        const consumableGoods = await Machine.find({
+            projectId: { $in: user.assignedSites },
+            category: 'consumables'
         }).populate('projectId', 'name').lean();
 
         res.json({ success: true, data: consumableGoods });
@@ -1165,8 +1193,9 @@ const getEquipments = async (req, res, next) => {
             return res.json({ success: true, data: [] });
         }
 
-        const equipments = await Equipment.find({
-            projectId: { $in: user.assignedSites }
+        const equipments = await Machine.find({
+            projectId: { $in: user.assignedSites },
+            category: 'equipment'
         }).populate('projectId', 'name').lean();
 
         res.json({ success: true, data: equipments });

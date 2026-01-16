@@ -36,6 +36,10 @@ const userSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    walletBalance: {
+        type: Number,
+        default: 0
+    },
     dateOfJoining: {
         type: Date,
         default: Date.now

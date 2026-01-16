@@ -29,6 +29,11 @@ const expenseSchema = new mongoose.Schema({
         enum: ['material', 'labour', 'equipment', 'other'],
         default: 'material'
     },
+    paymentMode: {
+        type: String,
+        enum: ['cash', 'online', 'check'], // standardized
+        default: 'cash'
+    },
     remarks: {
         type: String,
         trim: true

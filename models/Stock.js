@@ -31,6 +31,11 @@ const stockSchema = new mongoose.Schema({
         required: [true, 'Quantity is required'],
         min: 0
     },
+    consumed: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
     unitPrice: {
         type: Number,
         required: [true, 'Unit price is required'],

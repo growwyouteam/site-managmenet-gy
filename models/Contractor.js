@@ -31,7 +31,20 @@ const contractorSchema = new mongoose.Schema({
     assignedProjects: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Project'
-    }]
+    }],
+    status: {
+        type: String,
+        enum: ['pending', 'complete'],
+        default: 'pending'
+    },
+    pendingAmount: {
+        type: Number,
+        default: 0
+    },
+    advancePayment: {
+        type: Number,
+        default: 0
+    }
 }, {
     timestamps: true
 });

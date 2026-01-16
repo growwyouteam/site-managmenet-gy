@@ -18,6 +18,11 @@ const contractorPaymentSchema = new mongoose.Schema({
         type: Number,
         required: true
     },
+    paymentMode: {
+        type: String,
+        enum: ['cash', 'online', 'check'],
+        default: 'cash'
+    },
     remark: {
         type: String,
         default: ''
