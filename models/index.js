@@ -21,5 +21,6 @@ module.exports = {
     LabEquipment: require('./LabEquipment'),
     ConsumableGoods: require('./ConsumableGoods'),
     Equipment: require('./Equipment'),
-    Transaction: require('./Transaction')
+    Transaction: require('./Transaction'),
+    BankDetail: require('./BankDetail')
 };

@@ -4,7 +4,7 @@
  */
 
 const mongoose = require('mongoose');
-const { User, Project, Vendor, VendorPayment, Expense, Labour, Contractor, ContractorPayment, Machine, Stock, LabEquipment, ConsumableGoods, Equipment, Transaction, Transfer } = require('../models');
+const { User, Project, Vendor, VendorPayment, Expense, Labour, Contractor, ContractorPayment, LabourPayment, Machine, Stock, LabEquipment, ConsumableGoods, Equipment, Transaction, Transfer, BankDetail } = require('../models');
 
 // ============ DASHBOARD ============
 
@@ -1285,47 +1285,212 @@ const createTransfer = async (req, res, next) => {
 
 const getAccounts = async (req, res, next) => {
     try {
-        // Get all expenses
-        const expenses = await Expense.find();
-        const totalExpenses = expenses.reduce((sum, expense) => sum + (expense.amount || 0), 0);
+        const { startDate, endDate, managerId } = req.query;
 
-        // Mock bank transactions and cash transactions for now
-        // In a real implementation, these would come from separate collections
-        const bankTransactions = [
-            { id: 1, date: new Date(), description: 'Initial Capital', amount: 100000, type: 'credit' },
-            { id: 2, date: new Date(), description: 'Project Payment', amount: 50000, type: 'credit' }
-        ];
+        // Build date filter
+        const dateFilter = {};
+        if (startDate) dateFilter.$gte = new Date(startDate);
+        if (endDate) dateFilter.$lte = new Date(endDate);
 
-        const cashTransactions = [
-            { id: 1, date: new Date(), description: 'Office Supplies', amount: 5000, type: 'debit' },
-            { id: 2, date: new Date(), description: 'Fuel Expense', amount: 2000, type: 'debit' }
-        ];
+        // Fetch all transaction sources
+        const [
+            manualTransactions,
+            expenses,
+            vendorPayments,
+            contractorPayments,
+            labourPayments
+        ] = await Promise.all([
+            Transaction.find(dateFilter.$gte || dateFilter.$lte ? { date: dateFilter } : {})
+                .populate('addedBy', 'name role')
+                .sort('-date')
+                .lean(),
+            Expense.find(dateFilter.$gte || dateFilter.$lte ? { createdAt: dateFilter } : {})
+                .populate('addedBy', 'name role')
+                .populate('projectId', 'name')
+                .sort('-createdAt')
+                .lean(),
+            VendorPayment.find(dateFilter.$gte || dateFilter.$lte ? { date: dateFilter } : {})
+                .populate('vendorId', 'name')
+                .sort('-date')
+                .lean(),
+            ContractorPayment.find(dateFilter.$gte || dateFilter.$lte ? { date: dateFilter } : {})
+                .sort('-date')
+                .lean(),
+            LabourPayment.find(dateFilter.$gte || dateFilter.$lte ? { date: dateFilter } : {})
+                .populate('labourId', 'name')
+                .sort('-date')
+                .lean()
+        ]);
 
-        const totalBankTransactions = bankTransactions.reduce((sum, t) => sum + (t.amount || 0), 0);
-        const totalCashTransactions = cashTransactions.reduce((sum, t) => sum + (t.amount || 0), 0);
+        // Normalize all transactions to a common format
+        const allTransactions = [];
+
+        // Helper to normalize payment mode
+        const normalizeMode = (mode) => (mode || 'cash').toLowerCase();
+
+        // Helper to ensure valid date
+        const ensureDate = (d, fallback) => {
+            if (!d) return new Date(fallback || Date.now());
+            const dateObj = new Date(d);
+            return isNaN(dateObj.getTime()) ? new Date(fallback || Date.now()) : dateObj;
+        };
+
+        // Add manual transactions
+        manualTransactions.forEach(t => {
+            allTransactions.push({
+                date: ensureDate(t.date),
+                description: t.description,
+                amount: t.amount,
+                type: t.type,
+                category: t.category,
+                paymentMode: normalizeMode(t.paymentMode),
+                source: t.addedBy ? `${t.addedBy.name} (${t.addedBy.role})` : 'System'
+            });
+        });
+
+        // Add expenses as debit transactions
+        expenses.forEach(e => {
+            // Filter by manager if specified
+            if (managerId && e.addedBy?._id?.toString() !== managerId) return;
+
+            allTransactions.push({
+                date: ensureDate(e.createdAt),
+                description: `${e.name}${e.projectId ? ` - ${e.projectId.name}` : ''}`,
+                amount: e.amount || 0,
+                type: 'debit',
+                category: 'expense',
+                paymentMode: normalizeMode(e.paymentMode),
+                source: e.addedBy ? `${e.addedBy.name} (${e.addedBy.role})` : 'System'
+            });
+        });
+
+        // Add vendor payments as debit transactions
+        vendorPayments.forEach(vp => {
+            allTransactions.push({
+                date: ensureDate(vp.date, vp.createdAt),
+                description: `Payment to ${vp.vendorId?.name || 'Vendor'}${vp.remark ? ` - ${vp.remark}` : ''}`,
+                amount: vp.amount || 0,
+                type: 'debit',
+                category: 'expense',
+                paymentMode: normalizeMode(vp.paymentMode),
+                source: 'Vendor Payment'
+            });
+        });
+
+        // Add contractor payments as debit transactions
+        contractorPayments.forEach(cp => {
+            allTransactions.push({
+                date: ensureDate(cp.date, cp.createdAt),
+                description: `Payment to ${cp.contractorName}${cp.remark ? ` - ${cp.remark}` : ''}`,
+                amount: cp.amount || 0,
+                type: 'debit',
+                category: 'expense',
+                paymentMode: normalizeMode(cp.paymentMode),
+                source: 'Contractor Payment'
+            });
+        });
+
+        // Add labour payments as debit transactions
+        labourPayments.forEach(lp => {
+            allTransactions.push({
+                date: ensureDate(lp.date, lp.createdAt),
+                description: `Payment to ${lp.labourId?.name || 'Labour'}${lp.remarks ? ` - ${lp.remarks}` : ''}`,
+                amount: lp.amount || 0,
+                type: 'debit',
+                category: 'expense',
+                paymentMode: normalizeMode(lp.paymentMode),
+                source: 'Labour Payment'
+            });
+        });
+
+        // Sort all transactions by date (newest first)
+        allTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+        // Calculate totals
+        const capital = manualTransactions
+            .filter(t => t.category === 'capital' && t.type === 'credit')
+            .reduce((sum, t) => sum + (t.amount || 0), 0);
+
+        const totalExpenses = allTransactions
+            .filter(t => t.type === 'debit')
+            .reduce((sum, t) => sum + (t.amount || 0), 0);
+
+        const totalBankTransactions = allTransactions
+            .filter(t => ['bank', 'online', 'upi', 'check'].includes(t.paymentMode))
+            .reduce((sum, t) => sum + (t.amount || 0), 0);
+
+        const totalCashTransactions = allTransactions
+            .filter(t => t.paymentMode === 'cash')
+            .reduce((sum, t) => sum + (t.amount || 0), 0);
 
         res.json({
             success: true,
             data: {
-                capital: 100000, // Mock capital
+                capital,
                 totalExpenses,
-                bankTransactions,
-                cashTransactions,
                 totalBankTransactions,
-                totalCashTransactions
+                totalCashTransactions,
+                transactions: allTransactions
             }
         });
     } catch (error) {
+        console.error('Error fetching accounts:', error);
         next(error);
     }
 };
 
 const addCapital = async (req, res, next) => {
-    res.json({ success: true, message: 'Feature coming soon' });
+    try {
+        const { amount, description, paymentMode, date } = req.body;
+
+        const transaction = new Transaction({
+            amount: parseFloat(amount),
+            type: 'credit',
+            category: 'capital',
+            description: description || 'Capital addition',
+            paymentMode: paymentMode || 'bank',
+            date: date || new Date(),
+            addedBy: req.user.userId
+        });
+
+        await transaction.save();
+
+        res.json({
+            success: true,
+            message: 'Capital added successfully',
+            data: transaction
+        });
+    } catch (error) {
+        console.error('Error adding capital:', error);
+        next(error);
+    }
 };
 
 const addTransaction = async (req, res, next) => {
-    res.json({ success: true, message: 'Feature coming soon' });
+    try {
+        const { amount, description, type, category, paymentMode, date } = req.body;
+
+        const transaction = new Transaction({
+            amount: parseFloat(amount),
+            type: type || 'debit',
+            category: category || 'other',
+            description: description || 'Transaction',
+            paymentMode: paymentMode || 'cash',
+            date: date || new Date(),
+            addedBy: req.user.userId
+        });
+
+        await transaction.save();
+
+        res.json({
+            success: true,
+            message: 'Transaction added successfully',
+            data: transaction
+        });
+    } catch (error) {
+        console.error('Error adding transaction:', error);
+        next(error);
+    }
 };
 
 // Allocate funds to site manager wallet
@@ -1664,6 +1829,51 @@ const getEquipments = async (req, res, next) => {
     }
 };
 
+// ============ BANK DETAILS ============
+
+const getBankDetails = async (req, res, next) => {
+    try {
+        const banks = await BankDetail.find().sort('-createdAt');
+        res.json({
+            success: true,
+            data: banks
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const addBankDetail = async (req, res, next) => {
+    try {
+        const { holderName, bankName, branch, accountNumber, ifscCode } = req.body;
+
+        // Check if account number already exists
+        const existing = await BankDetail.findOne({ accountNumber });
+        if (existing) {
+            return res.status(400).json({
+                success: false,
+                error: 'Account number already exists'
+            });
+        }
+
+        const bank = await BankDetail.create({
+            holderName,
+            bankName,
+            branch,
+            accountNumber,
+            ifscCode,
+            addedBy: req.user.userId
+        });
+
+        res.status(201).json({
+            success: true,
+            data: bank
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getDashboard,
     getProjects,
@@ -1717,5 +1927,7 @@ module.exports = {
     addConsumableGoods,
     getConsumableGoods,
     addEquipment,
-    getEquipments
+    getEquipments,
+    getBankDetails,
+    addBankDetail
 };

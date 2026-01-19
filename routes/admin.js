@@ -72,7 +72,9 @@ const {
   getConsumableGoods,
   addEquipment,
   getEquipments,
-  allocateFunds
+  allocateFunds,
+  getBankDetails,
+  addBankDetail
 } = require('../controllers/adminController');
 
 // Apply authentication and admin middleware to all routes
@@ -165,5 +167,9 @@ router.post('/equipments', addEquipment);
 router.get('/notifications', getNotifications);
 router.post('/notifications', sendNotification);
 router.put('/notifications/:id/read', markNotificationRead);
+
+// Bank Details
+router.get('/bank-details', getBankDetails);
+router.post('/bank-details', addBankDetail);
 
 module.exports = router;
