@@ -22,5 +22,6 @@ module.exports = {
     ConsumableGoods: require('./ConsumableGoods'),
     Equipment: require('./Equipment'),
     Transaction: require('./Transaction'),
-    BankDetail: require('./BankDetail')
+    BankDetail: require('./BankDetail'),
+    Attendance: require('./Attendance')
 };

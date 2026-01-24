@@ -4,7 +4,7 @@
  */
 
 const mongoose = require('mongoose');
-const { User, Project, Vendor, VendorPayment, Expense, Labour, Contractor, ContractorPayment, LabourPayment, Machine, Stock, LabEquipment, ConsumableGoods, Equipment, Transaction, Transfer, BankDetail } = require('../models');
+const { User, Project, Vendor, VendorPayment, Expense, Labour, Contractor, ContractorPayment, LabourPayment, Machine, Stock, LabEquipment, ConsumableGoods, Equipment, Transaction, Transfer, BankDetail, Attendance, LabourAttendance } = require('../models');
 
 // ============ DASHBOARD ============
 
@@ -432,11 +432,22 @@ const createVendor = async (req, res, next) => {
     try {
         const { name, contact, email, address } = req.body;
 
+        // Upload documents to Cloudinary if files exist
+        let documentsUrls = [];
+        if (req.files && req.files.length > 0) {
+            const { uploadToCloudinary } = require('../config/cloudinary');
+            for (const file of req.files) {
+                const url = await uploadToCloudinary(file.buffer, 'vendors');
+                documentsUrls.push(url);
+            }
+        }
+
         const newVendor = new Vendor({
             name,
             contact,
             email: email ? email.toLowerCase() : undefined,
-            address
+            address,
+            documents: documentsUrls
         });
 
         await newVendor.save();
@@ -585,6 +596,13 @@ const createExpense = async (req, res, next) => {
     try {
         const { projectId, name, amount, voucherNumber, category, remarks } = req.body;
 
+        // Upload receipt to Cloudinary if file exists
+        let receiptUrl = null;
+        if (req.file) {
+            const { uploadToCloudinary } = require('../config/cloudinary');
+            receiptUrl = await uploadToCloudinary(req.file.buffer, 'expenses');
+        }
+
         const newExpense = new Expense({
             projectId,
             name,
@@ -592,6 +610,7 @@ const createExpense = async (req, res, next) => {
             voucherNumber,
             category: category || 'material',
             remarks,
+            receipt: receiptUrl,
             addedBy: req.user.userId
         });
 
@@ -683,7 +702,20 @@ const getContractors = async (req, res, next) => {
 
 const createContractor = async (req, res, next) => {
     try {
-        const contractor = new Contractor(req.body);
+        // Upload documents to Cloudinary if files exist
+        let documentsUrls = [];
+        if (req.files && req.files.length > 0) {
+            const { uploadToCloudinary } = require('../config/cloudinary');
+            for (const file of req.files) {
+                const url = await uploadToCloudinary(file.buffer, 'contractors');
+                documentsUrls.push(url);
+            }
+        }
+
+        const contractor = new Contractor({
+            ...req.body,
+            documents: documentsUrls
+        });
         await contractor.save();
         res.status(201).json({
             success: true,
@@ -800,7 +832,12 @@ const getMachines = async (req, res, next) => {
         const machines = await Machine.find()
             .populate('projectId', 'name location')
             .sort('-createdAt')
+            .limit(200)
             .lean();
+
+        console.log(`🔍 [getMachines] Fetched ${machines.length} machines from database`);
+        console.log(`🔍 [getMachines] Sample data:`, machines.slice(0, 2));
+
         res.json({
             success: true,
             data: machines
@@ -1110,13 +1147,13 @@ const getTransfers = async (req, res, next) => {
             .populate('fromProject', 'name')
             .populate('toProject', 'name')
             .populate('labourId', 'name')
-            .populate('machineId', 'name') // Machine model covers Big Machine, Lab Eq, Equipment if they share ID space? No, LabEq has own model.
-            // Populate logic is tricky if itemId refers to different models.
-            // But Transfer model likely has separate fields or just one ID?
-            // "labourId", "machineId" are in Transfer model.
-            // For stock, "materialName".
+            .populate('machineId', 'name')
             .sort('-createdAt')
+            .limit(200)
             .lean();
+
+        console.log(`🔍 [getTransfers] Fetched ${transfers.length} transfers from database`);
+        console.log(`🔍 [getTransfers] Sample data:`, transfers.slice(0, 2));
 
         // Manual population for other types if needed?
         // Let's assume basic populate works for now. 
@@ -1303,24 +1340,36 @@ const getAccounts = async (req, res, next) => {
             Transaction.find(dateFilter.$gte || dateFilter.$lte ? { date: dateFilter } : {})
                 .populate('addedBy', 'name role')
                 .sort('-date')
+                .limit(100)
                 .lean(),
             Expense.find(dateFilter.$gte || dateFilter.$lte ? { createdAt: dateFilter } : {})
                 .populate('addedBy', 'name role')
                 .populate('projectId', 'name')
                 .sort('-createdAt')
+                .limit(100)
                 .lean(),
             VendorPayment.find(dateFilter.$gte || dateFilter.$lte ? { date: dateFilter } : {})
                 .populate('vendorId', 'name')
                 .sort('-date')
+                .limit(100)
                 .lean(),
             ContractorPayment.find(dateFilter.$gte || dateFilter.$lte ? { date: dateFilter } : {})
                 .sort('-date')
+                .limit(100)
                 .lean(),
             LabourPayment.find(dateFilter.$gte || dateFilter.$lte ? { date: dateFilter } : {})
                 .populate('labourId', 'name')
-                .sort('-date')
+                .sort('-createdAt')
+                .limit(100)
                 .lean()
         ]);
+
+        console.log(`🔍 [getAccounts] Fetched data:`);
+        console.log(`  - Transactions: ${manualTransactions.length}`);
+        console.log(`  - Expenses: ${expenses.length}`);
+        console.log(`  - VendorPayments: ${vendorPayments.length}`);
+        console.log(`  - ContractorPayments: ${contractorPayments.length}`);
+        console.log(`  - LabourPayments: ${labourPayments.length}`);
 
         // Normalize all transactions to a common format
         const allTransactions = [];
@@ -1450,7 +1499,8 @@ const addCapital = async (req, res, next) => {
             description: description || 'Capital addition',
             paymentMode: paymentMode || 'bank',
             date: date || new Date(),
-            addedBy: req.user.userId
+            addedBy: req.user.userId,
+            bankId: req.body.bankId || null
         });
 
         await transaction.save();
@@ -1477,7 +1527,8 @@ const addTransaction = async (req, res, next) => {
             description: description || 'Transaction',
             paymentMode: paymentMode || 'cash',
             date: date || new Date(),
-            addedBy: req.user.userId
+            addedBy: req.user.userId,
+            bankId: req.body.bankId || null
         });
 
         await transaction.save();
@@ -1512,8 +1563,10 @@ const allocateFunds = async (req, res, next) => {
             category: 'wallet_allocation',
             description: description || `Wallet allocation to ${manager.name}`,
             amount: parseFloat(amount),
+            type: 'debit',
             paymentMode: paymentMode || 'bank',
-            date: new Date()
+            date: new Date(),
+            bankId: req.body.bankId || null
         });
 
         await transaction.save();
@@ -1622,11 +1675,44 @@ const generateReport = async (req, res, next) => {
 };
 
 const getAttendance = async (req, res, next) => {
-    res.json({ success: true, data: [] });
+    try {
+        const attendance = await Attendance.find()
+            .populate('userId', 'name email role')
+            .populate('projectId', 'name location')
+            .sort('-date');
+
+        res.json({ success: true, data: attendance });
+    } catch (error) {
+        next(error);
+    }
 };
 
 const getLabourAttendance = async (req, res, next) => {
-    res.json({ success: true, data: [] });
+    try {
+        const attendance = await LabourAttendance.find()
+            .populate('labourId', 'name designation')
+            .populate('projectId', 'name location')
+            .populate('markedBy', 'name')
+            .sort('-createdAt');
+
+        res.json({ success: true, data: attendance });
+    } catch (error) {
+        next(error);
+    }
+};
+
+
+const getLabourPayments = async (req, res, next) => {
+    try {
+        const payments = await LabourPayment.find()
+            .populate('labourId', 'name designation phone')
+            .populate('userId', 'name')
+            .sort('-createdAt')
+            .limit(200);
+        res.json({ success: true, data: payments });
+    } catch (error) {
+        next(error);
+    }
 };
 
 const getNotifications = async (req, res, next) => {
@@ -1694,6 +1780,13 @@ const addLabEquipment = async (req, res, next) => {
     try {
         const { projectId, name, category, quantity, status, serialNumber, purchaseDate, remarks } = req.body;
 
+        // Upload photo to Cloudinary if file exists
+        let photoUrl = null;
+        if (req.file) {
+            const { uploadToCloudinary } = require('../config/cloudinary');
+            photoUrl = await uploadToCloudinary(req.file.buffer, 'lab-equipment');
+        }
+
         const labEquipment = await LabEquipment.create({
             projectId,
             name,
@@ -1702,7 +1795,8 @@ const addLabEquipment = async (req, res, next) => {
             status: status || 'active',
             serialNumber,
             purchaseDate,
-            remarks
+            remarks,
+            photo: photoUrl
         });
 
         console.log(`✅ Lab Equipment added: ${name}`);
@@ -1741,6 +1835,13 @@ const addConsumableGoods = async (req, res, next) => {
     try {
         const { projectId, name, category, quantity, unit, minStockLevel, expiryDate, remarks } = req.body;
 
+        // Upload photo to Cloudinary if file exists
+        let photoUrl = null;
+        if (req.file) {
+            const { uploadToCloudinary } = require('../config/cloudinary');
+            photoUrl = await uploadToCloudinary(req.file.buffer, 'consumables');
+        }
+
         const consumableGoods = await ConsumableGoods.create({
             projectId,
             name,
@@ -1749,7 +1850,8 @@ const addConsumableGoods = async (req, res, next) => {
             unit,
             minStockLevel: minStockLevel || 0,
             expiryDate,
-            remarks
+            remarks,
+            photo: photoUrl
         });
 
         console.log(`✅ Consumable Goods added: ${name}`);
@@ -1788,6 +1890,13 @@ const addEquipment = async (req, res, next) => {
     try {
         const { projectId, name, category, quantity, status, serialNumber, purchaseDate, remarks } = req.body;
 
+        // Upload photo to Cloudinary if file exists
+        let photoUrl = null;
+        if (req.file) {
+            const { uploadToCloudinary } = require('../config/cloudinary');
+            photoUrl = await uploadToCloudinary(req.file.buffer, 'equipment');
+        }
+
         const equipment = await Equipment.create({
             projectId,
             name,
@@ -1796,7 +1905,8 @@ const addEquipment = async (req, res, next) => {
             status: status || 'active',
             serialNumber,
             purchaseDate,
-            remarks
+            remarks,
+            photo: photoUrl
         });
 
         console.log(`✅ Equipment added: ${name}`);
@@ -1839,6 +1949,38 @@ const getBankDetails = async (req, res, next) => {
             data: banks
         });
     } catch (error) {
+        next(error);
+    }
+};
+
+const getBankDetailWithTransactions = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const bank = await BankDetail.findById(id);
+
+        if (!bank) {
+            return res.status(404).json({
+                success: false,
+                error: 'Bank not found'
+            });
+        }
+
+        // Fetch transactions linked to this bank
+        // We match explicitly on bankId OR if description contains bank name (backward compatibility if needed, but sticking to new schema is safer)
+        const transactions = await Transaction.find({ bankId: id })
+            .populate('addedBy', 'name role')
+            .sort('-date')
+            .lean();
+
+        res.json({
+            success: true,
+            data: {
+                bank,
+                transactions
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching bank detail:', error);
         next(error);
     }
 };
@@ -1918,6 +2060,7 @@ module.exports = {
     generateReport,
     getAttendance,
     getLabourAttendance,
+    getLabourPayments,
     getNotifications,
     sendNotification,
     markNotificationRead,
@@ -1929,5 +2072,6 @@ module.exports = {
     addEquipment,
     getEquipments,
     getBankDetails,
+    getBankDetailWithTransactions,
     addBankDetail
 };

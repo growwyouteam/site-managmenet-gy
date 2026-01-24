@@ -38,5 +38,5 @@ const uploadMultiple = multer({
 module.exports = {
     uploadSingle: upload.single('photo'),
     uploadReceipt: upload.single('receipt'),
-    uploadMultiple: uploadMultiple.array('photos', 10) // Max 10 files
+    uploadMultiple: uploadMultiple.array('documents', 10) // Max 10 files
 };

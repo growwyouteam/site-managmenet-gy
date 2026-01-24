@@ -3,7 +3,7 @@
  * Handles all site manager-specific operations with MongoDB
  */
 
-const { User, Project, Vendor, Expense, Labour, LabourAttendance, LabourPayment, Stock, StockOut, Machine, Transfer, DailyReport, LabEquipment, ConsumableGoods, Equipment } = require('../models');
+const { User, Project, Vendor, Expense, Labour, LabourAttendance, LabourPayment, Stock, StockOut, Machine, Transfer, DailyReport, LabEquipment, ConsumableGoods, Equipment, Attendance } = require('../models');
 
 // ============ DASHBOARD ============
 
@@ -59,11 +59,59 @@ const getDashboard = async (req, res, next) => {
 // ============ ATTENDANCE ============
 
 const markAttendance = async (req, res, next) => {
-    res.json({ success: true, message: 'Feature coming soon' });
+    try {
+        const { projectId, date, photo, remarks } = req.body;
+        const userId = req.user.userId;
+
+        // Check if attendance already marked for this date
+        const existingAttendance = await Attendance.findOne({
+            userId,
+            date
+        });
+
+        if (existingAttendance) {
+            return res.status(400).json({
+                success: false,
+                error: 'Attendance already marked for this date'
+            });
+        }
+
+        const attendance = new Attendance({
+            userId,
+            projectId,
+            date,
+            photo,  // Photo is now optional
+            remarks
+        });
+
+        await attendance.save();
+
+        res.status(201).json({
+            success: true,
+            message: 'Attendance marked successfully',
+            data: attendance
+        });
+    } catch (error) {
+        next(error);
+    }
 };
 
 const getMyAttendance = async (req, res, next) => {
-    res.json({ success: true, data: [] });
+    try {
+        const userId = req.user.userId;
+
+        const attendance = await Attendance.find({ userId })
+            .populate('projectId', 'name location')
+            .sort('-date')
+            .limit(100);
+
+        res.json({
+            success: true,
+            data: attendance
+        });
+    } catch (error) {
+        next(error);
+    }
 };
 
 // ============ LABOUR ============
@@ -81,9 +129,12 @@ const getLabours = async (req, res, next) => {
             });
         }
 
-        const labours = await Labour.find({
-            assignedSite: { $in: user.assignedSites || [] }
-        }).populate('assignedSite', 'name location');
+        const { projectId } = req.query;
+        const query = projectId
+            ? { assignedSite: projectId }
+            : { assignedSite: { $in: user.assignedSites || [] } };
+
+        const labours = await Labour.find(query).populate('assignedSite', 'name location');
 
         res.json({
             success: true,
@@ -469,6 +520,7 @@ const getStockOuts = async (req, res, next) => {
             quantity: s.quantity,
             unit: s.unit,
             project: typeof s.projectId === 'object' ? s.projectId.name : s.projectId,
+            projectId: typeof s.projectId === 'object' ? s.projectId._id : s.projectId, // Added for filtering
             usedFor: s.usedFor,
             remarks: s.remarks || '-'
         }));
@@ -584,28 +636,131 @@ const requestTransfer = async (req, res, next) => {
             quantity: parseFloat(quantity) || 1,
             remarks,
             requestedBy: userId,
-            status: 'pending' // Default status
+            status: 'approved' // Auto-approve for Site Managers
         };
 
-        // Handle specific types
+        // Handle specific types and ID assignment
         if (type === 'labour') {
             if (!itemId) return res.status(400).json({ success: false, error: 'Labour is required' });
             transferData.labourId = itemId;
-        } else if (type === 'machine' || type === 'lab-equipment' || type === 'consumable-goods' || type === 'equipment') {
+        } else if (type === 'machine' || type === 'lab-equipment' || type === 'equipment') {
             if (!itemId) return res.status(400).json({ success: false, error: 'Item is required' });
             transferData.machineId = itemId;
-        } else if (type === 'stock') {
-            if (!itemId) return res.status(400).json({ success: false, error: 'Material name is required' });
-            // For stock, itemId contains the material name (as per frontend usage)
+        } else if (type === 'stock' || type === 'consumable-goods') {
+            if (!itemId) return res.status(400).json({ success: false, error: 'Item is required' });
             transferData.materialName = itemId;
+
+            if (type === 'consumable-goods') {
+                // Try to resolve name from ID if possible, though itemId usually is name for stock?
+                // But for consumable-goods frontend might pass ID.
+                // Let's try to find if it's an ID
+                if (itemId.match(/^[0-9a-fA-F]{24}$/)) {
+                    const item = await ConsumableGoods.findById(itemId);
+                    if (item) transferData.materialName = item.name;
+                }
+            }
         }
 
         const transfer = new Transfer(transferData);
         await transfer.save();
 
+        // EXECUTE TRANSFER (Move Items Immediately)
+        if (type === 'labour') {
+            await Labour.findByIdAndUpdate(itemId, { assignedSite: toProject });
+        } else if (type === 'machine') {
+            await Machine.findByIdAndUpdate(itemId, {
+                projectId: toProject,
+                status: 'available',
+                assignedToContractor: null
+            });
+        } else if (type === 'lab-equipment') {
+            await LabEquipment.findByIdAndUpdate(itemId, {
+                projectId: toProject,
+                status: 'active'
+            });
+        } else if (type === 'equipment') {
+            await Equipment.findByIdAndUpdate(itemId, {
+                projectId: toProject,
+                status: 'active'
+            });
+        } else if (type === 'stock') {
+            // Logic to move stock
+            // itemId is materialName (as per frontend usage usually)
+
+            const sourceStock = await Stock.findOne({ projectId: fromProject, materialName: itemId });
+
+            if (sourceStock) {
+                sourceStock.quantity = Math.max(0, sourceStock.quantity - (parseFloat(quantity) || 0));
+                await sourceStock.save();
+
+                // Add to destination
+                const stockQuantity = parseFloat(quantity) || 0;
+                let destStock = await Stock.findOne({
+                    projectId: toProject,
+                    materialName: sourceStock.materialName,
+                    vendorId: sourceStock.vendorId,
+                    unitPrice: sourceStock.unitPrice
+                });
+
+                if (destStock) {
+                    destStock.quantity += stockQuantity;
+                    destStock.totalPrice = destStock.quantity * destStock.unitPrice;
+                    await destStock.save();
+                } else {
+                    await Stock.create({
+                        projectId: toProject,
+                        vendorId: sourceStock.vendorId,
+                        materialName: sourceStock.materialName,
+                        unit: sourceStock.unit,
+                        quantity: stockQuantity,
+                        unitPrice: sourceStock.unitPrice,
+                        totalPrice: stockQuantity * sourceStock.unitPrice,
+                        addedBy: userId,
+                        photo: sourceStock.photo,
+                        remarks: `Transferred from ${fromProject}`
+                    });
+                }
+            }
+        } else if (type === 'consumable-goods') {
+            // itemId might be ID or Name. Using id as priority.
+            let sourceItem = null;
+            if (itemId.match(/^[0-9a-fA-F]{24}$/)) {
+                sourceItem = await ConsumableGoods.findById(itemId);
+            } else {
+                sourceItem = await ConsumableGoods.findOne({ projectId: fromProject, name: itemId });
+            }
+
+            if (sourceItem) {
+                sourceItem.quantity = Math.max(0, sourceItem.quantity - (parseFloat(quantity) || 0));
+                await sourceItem.save();
+
+                const qty = parseFloat(quantity) || 0;
+                let destItem = await ConsumableGoods.findOne({
+                    projectId: toProject,
+                    name: sourceItem.name
+                });
+
+                if (destItem) {
+                    destItem.quantity += qty;
+                    await destItem.save();
+                } else {
+                    await ConsumableGoods.create({
+                        projectId: toProject,
+                        name: sourceItem.name,
+                        category: sourceItem.category,
+                        quantity: qty,
+                        unit: sourceItem.unit,
+                        minStockLevel: sourceItem.minStockLevel,
+                        expiryDate: sourceItem.expiryDate,
+                        remarks: `Transferred from ${fromProject}`
+                    });
+                }
+            }
+        }
+
         res.status(201).json({
             success: true,
-            message: 'Transfer request submitted successfully',
+            message: 'Transfer executed successfully (Auto-Approved)',
             data: transfer
         });
     } catch (error) {
@@ -656,14 +811,36 @@ const getMaterials = async (req, res, next) => {
             return res.json({ success: true, data: [] });
         }
 
-        // Aggregate unique material names from Stock (Stock In) for assigned projects
-        const materials = await Stock.distinct('materialName', {
-            projectId: { $in: user.assignedSites }
-        });
+        // Aggregate stocks by project and material to get available quantities
+        const materials = await Stock.aggregate([
+            {
+                $match: {
+                    projectId: { $in: user.assignedSites },
+                    quantity: { $gt: 0 } // Only consider positive quantities
+                }
+            },
+            {
+                $group: {
+                    _id: { material: "$materialName", project: "$projectId" },
+                    totalQuantity: { $sum: "$quantity" },
+                    unit: { $first: "$unit" }
+                }
+            },
+            {
+                $project: {
+                    _id: 0,
+                    materialName: "$_id.material",
+                    projectId: "$_id.project",
+                    quantity: "$totalQuantity",
+                    unit: 1
+                }
+            },
+            { $sort: { materialName: 1 } }
+        ]);
 
         res.json({
             success: true,
-            data: materials // Returns array of strings e.g. ["Cement", "Sand"]
+            data: materials // Returns [{ materialName, projectId, quantity, unit }, ...]
         });
     } catch (error) {
         next(error);
@@ -745,6 +922,7 @@ const getPayments = async (req, res, next) => {
             finalAmount: p.finalAmount,
             paymentMode: p.paymentMode,
             createdAt: p.createdAt,
+            labourId: p.labourId?._id || p.labourId, // Added for frontend identification/filtering
             labourName: p.labourId?.name || 'Unknown Labour'
         }));
 
@@ -990,10 +1168,14 @@ const getMachines = async (req, res, next) => {
 
         console.log(`🔍 Fetching machines for sites:`, user.assignedSites);
 
-        const machines = await Machine.find({
-            projectId: { $in: user.assignedSites }
-            // Removed status filter - show all machines for transfer
-        }).populate('projectId', 'name');
+        const { projectId } = req.query;
+        const query = projectId
+            ? { projectId: projectId }
+            : { projectId: { $in: user.assignedSites } };
+
+        console.log(`🔍 Fetching machines for query:`, query);
+
+        const machines = await Machine.find(query).populate('projectId', 'name');
 
         console.log(`✅ Found ${machines.length} machines for user ${user.name}`);
 
@@ -1151,10 +1333,13 @@ const getLabEquipments = async (req, res, next) => {
             return res.json({ success: true, data: [] });
         }
 
-        const labEquipments = await Machine.find({
-            projectId: { $in: user.assignedSites },
-            category: 'lab'
-        }).populate('projectId', 'name').lean();
+        const { projectId } = req.query;
+        const query = {
+            category: 'lab',
+            projectId: projectId ? projectId : { $in: user.assignedSites }
+        };
+
+        const labEquipments = await Machine.find(query).populate('projectId', 'name').lean();
 
         res.json({ success: true, data: labEquipments });
     } catch (error) {
@@ -1172,10 +1357,13 @@ const getConsumableGoods = async (req, res, next) => {
             return res.json({ success: true, data: [] });
         }
 
-        const consumableGoods = await Machine.find({
-            projectId: { $in: user.assignedSites },
-            category: 'consumables'
-        }).populate('projectId', 'name').lean();
+        const { projectId } = req.query;
+        const query = {
+            category: 'consumables',
+            projectId: projectId ? projectId : { $in: user.assignedSites }
+        };
+
+        const consumableGoods = await Machine.find(query).populate('projectId', 'name').lean();
 
         res.json({ success: true, data: consumableGoods });
     } catch (error) {
@@ -1193,10 +1381,13 @@ const getEquipments = async (req, res, next) => {
             return res.json({ success: true, data: [] });
         }
 
-        const equipments = await Machine.find({
-            projectId: { $in: user.assignedSites },
-            category: 'equipment'
-        }).populate('projectId', 'name').lean();
+        const { projectId } = req.query;
+        const query = {
+            category: 'equipment',
+            projectId: projectId ? projectId : { $in: user.assignedSites }
+        };
+
+        const equipments = await Machine.find(query).populate('projectId', 'name').lean();
 
         res.json({ success: true, data: equipments });
     } catch (error) {

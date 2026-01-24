@@ -40,6 +40,10 @@ const transactionSchema = new mongoose.Schema({
     addedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
+    },
+    bankId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'BankDetail'
     }
 }, {
     timestamps: true

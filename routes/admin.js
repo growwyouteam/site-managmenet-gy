@@ -6,7 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { isAuthenticated, isAdmin } = require('../middleware/auth');
-const { uploadSingle, uploadReceipt } = require('../middleware/upload');
+const { uploadSingle, uploadReceipt, uploadMultiple } = require('../middleware/upload');
 const {
   projectValidation,
   userValidation,
@@ -74,6 +74,7 @@ const {
   getEquipments,
   allocateFunds,
   getBankDetails,
+  getBankDetailWithTransactions,
   addBankDetail
 } = require('../controllers/adminController');
 
@@ -106,7 +107,7 @@ router.delete('/stocks/:id', deleteStock);
 
 // Vendors
 router.get('/vendors', getVendors);
-router.post('/vendors', vendorValidation, createVendor);
+router.post('/vendors', uploadMultiple, vendorValidation, createVendor);
 router.put('/vendors/:id', updateVendor);
 router.delete('/vendors/:id', deleteVendor);
 router.post('/vendors/payment', uploadReceipt, recordVendorPayment);
@@ -114,7 +115,7 @@ router.get('/vendors/:vendorId/payments', getVendorPayments);
 
 // Expenses
 router.get('/expenses', getExpenses);
-router.post('/expenses', expenseValidation, createExpense);
+router.post('/expenses', uploadSingle, expenseValidation, createExpense);
 router.delete('/expenses/:id', deleteExpense);
 
 // Users (Site Managers)
@@ -125,7 +126,7 @@ router.delete('/users/:id', deleteUser);
 
 // Contractors
 router.get('/contractors', getContractors);
-router.post('/contractors', createContractor);
+router.post('/contractors', uploadMultiple, createContractor);
 router.put('/contractors/:id', updateContractor);
 router.delete('/contractors/:id', deleteContractor);
 router.get('/contractors/:contractorId/payments', getContractorPayments);
@@ -153,15 +154,15 @@ router.get('/labours', getLabours);
 
 // Lab Equipment
 router.get('/lab-equipments', getLabEquipments);
-router.post('/lab-equipments', addLabEquipment);
+router.post('/lab-equipments', uploadSingle, addLabEquipment);
 
 // Consumable Goods
 router.get('/consumable-goods', getConsumableGoods);
-router.post('/consumable-goods', addConsumableGoods);
+router.post('/consumable-goods', uploadSingle, addConsumableGoods);
 
 // Equipment
 router.get('/equipments', getEquipments);
-router.post('/equipments', addEquipment);
+router.post('/equipments', uploadSingle, addEquipment);
 
 // Notifications
 router.get('/notifications', getNotifications);
@@ -170,6 +171,7 @@ router.put('/notifications/:id/read', markNotificationRead);
 
 // Bank Details
 router.get('/bank-details', getBankDetails);
+router.get('/bank-details/:id', getBankDetailWithTransactions);
 router.post('/bank-details', addBankDetail);
 
 module.exports = router;
