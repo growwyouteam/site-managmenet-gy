@@ -36,8 +36,16 @@ const labourPaymentSchema = new mongoose.Schema({
     },
     paymentMode: {
         type: String,
-        enum: ['cash', 'bank', 'upi', 'check'],
+        enum: ['cash', 'bank', 'bank_transfer', 'upi', 'online', 'check', 'credit', 'other'],
         default: 'cash'
+    },
+    bankId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'BankDetail'
+    },
+    creditorId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Creditor'
     },
     remarks: {
         type: String,

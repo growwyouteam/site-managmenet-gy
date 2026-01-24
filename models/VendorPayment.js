@@ -13,8 +13,16 @@ const vendorPaymentSchema = new mongoose.Schema({
     },
     paymentMode: {
         type: String,
-        enum: ['cash', 'upi', 'bank_transfer', 'check', 'other'],
+        enum: ['cash', 'upi', 'online', 'bank_transfer', 'bank', 'check', 'credit', 'other'],
         required: true
+    },
+    bankId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'BankDetail'
+    },
+    creditorId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Creditor'
     },
     date: {
         type: Date,

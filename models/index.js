@@ -23,5 +23,6 @@ module.exports = {
     Equipment: require('./Equipment'),
     Transaction: require('./Transaction'),
     BankDetail: require('./BankDetail'),
+    Creditor: require('./Creditor'),
     Attendance: require('./Attendance')
 };

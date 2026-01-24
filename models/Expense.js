@@ -31,8 +31,16 @@ const expenseSchema = new mongoose.Schema({
     },
     paymentMode: {
         type: String,
-        enum: ['cash', 'online', 'check'], // standardized
+        enum: ['cash', 'online', 'upi', 'bank_transfer', 'bank', 'check', 'credit', 'other'], // standardized
         default: 'cash'
+    },
+    bankId: { // Associated with bank/online/check
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'BankDetail'
+    },
+    creditorId: { // Associated with credit
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Creditor'
     },
     remarks: {
         type: String,

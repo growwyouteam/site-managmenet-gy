@@ -74,9 +74,22 @@ const {
   getEquipments,
   allocateFunds,
   getBankDetails,
-  getBankDetailWithTransactions,
-  addBankDetail
+  addBankDetail,
+  getBankDetailWithTransactions
 } = require('../controllers/adminController');
+
+const {
+  getCreditors,
+  createCreditor,
+  updateCreditor,
+  deleteCreditor,
+  getCreditorDetails
+} = require('../controllers/creditorController');
+
+const {
+  updateBankDetail,
+  deleteBankDetail
+} = require('../controllers/bankController');
 
 // Apply authentication and admin middleware to all routes
 router.use(isAuthenticated);
@@ -170,8 +183,17 @@ router.post('/notifications', sendNotification);
 router.put('/notifications/:id/read', markNotificationRead);
 
 // Bank Details
-router.get('/bank-details', getBankDetails);
-router.get('/bank-details/:id', getBankDetailWithTransactions);
-router.post('/bank-details', addBankDetail);
+router.get('/bank-details', isAuthenticated, isAdmin, getBankDetails);
+router.post('/bank-details', isAuthenticated, isAdmin, addBankDetail); // Add ID validation if needed
+router.put('/bank-details/:id', isAuthenticated, isAdmin, updateBankDetail);
+router.delete('/bank-details/:id', isAuthenticated, isAdmin, deleteBankDetail);
+router.get('/bank-details/:id', isAuthenticated, isAdmin, getBankDetailWithTransactions);
+
+// ============ CREDITORS ============
+router.get('/creditors', isAuthenticated, isAdmin, getCreditors);
+router.post('/creditors', isAuthenticated, isAdmin, createCreditor);
+router.put('/creditors/:id', isAuthenticated, isAdmin, updateCreditor);
+router.delete('/creditors/:id', isAuthenticated, isAdmin, deleteCreditor);
+router.get('/creditors/:id', isAuthenticated, isAdmin, getCreditorDetails);
 
 module.exports = router;

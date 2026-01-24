@@ -20,8 +20,16 @@ const contractorPaymentSchema = new mongoose.Schema({
     },
     paymentMode: {
         type: String,
-        enum: ['cash', 'online', 'check'],
+        enum: ['cash', 'online', 'upi', 'bank_transfer', 'bank', 'check', 'credit', 'other'],
         default: 'cash'
+    },
+    bankId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'BankDetail'
+    },
+    creditorId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Creditor'
     },
     remark: {
         type: String,

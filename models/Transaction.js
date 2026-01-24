@@ -44,6 +44,10 @@ const transactionSchema = new mongoose.Schema({
     bankId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'BankDetail'
+    },
+    creditorId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Creditor'
     }
 }, {
     timestamps: true

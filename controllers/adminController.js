@@ -4,7 +4,7 @@
  */
 
 const mongoose = require('mongoose');
-const { User, Project, Vendor, VendorPayment, Expense, Labour, Contractor, ContractorPayment, LabourPayment, Machine, Stock, LabEquipment, ConsumableGoods, Equipment, Transaction, Transfer, BankDetail, Attendance, LabourAttendance } = require('../models');
+const { User, Project, Vendor, VendorPayment, Expense, Labour, Contractor, ContractorPayment, LabourPayment, Machine, Stock, LabEquipment, ConsumableGoods, Equipment, Transaction, Transfer, BankDetail, Creditor, Attendance, LabourAttendance } = require('../models');
 
 // ============ DASHBOARD ============
 
@@ -517,7 +517,7 @@ const deleteVendor = async (req, res, next) => {
 // Record vendor payment
 const recordVendorPayment = async (req, res, next) => {
     try {
-        const { vendorId, amount } = req.body;
+        const { vendorId, amount, paymentMode, date, remarks, bankId, creditorId } = req.body;
 
         const vendor = await Vendor.findById(vendorId);
 
@@ -540,7 +540,51 @@ const recordVendorPayment = async (req, res, next) => {
             vendor.pendingAmount = newPending;
         }
 
+        const newPayment = new VendorPayment({
+            vendorId,
+            amount: paidAmount,
+            date: date || new Date(),
+            paymentMode,
+            bankId: bankId && bankId !== '' ? bankId : undefined,
+            creditorId: creditorId && creditorId !== '' ? creditorId : undefined,
+            remarks
+        });
+
         await vendor.save();
+        await newPayment.save();
+
+        // If bankId is provided, record transaction in bank
+        if (bankId && bankId !== '') {
+            await BankDetail.findByIdAndUpdate(bankId, {
+                $inc: { currentBalance: -paidAmount },
+                $push: {
+                    transactions: {
+                        type: 'debit',
+                        amount: paidAmount,
+                        date: date || new Date(),
+                        description: `Payment to vendor: ${vendor.name}`,
+                        refId: newPayment._id,
+                        refModel: 'VendorPayment'
+                    }
+                }
+            });
+        }
+
+        if (creditorId && creditorId !== '') {
+            await Creditor.findByIdAndUpdate(creditorId, {
+                $inc: { currentBalance: -parseFloat(paidAmount) }, // Payment reduces balance (Debit)
+                $push: {
+                    transactions: {
+                        type: 'debit',
+                        amount: parseFloat(paidAmount),
+                        date: date || new Date(),
+                        description: `Payment for vendor: ${vendor.name}`,
+                        refId: newPayment._id,
+                        refModel: 'VendorPayment'
+                    }
+                }
+            });
+        }
 
         res.json({
             success: true,
@@ -594,7 +638,7 @@ const getExpenses = async (req, res, next) => {
 // Create new expense
 const createExpense = async (req, res, next) => {
     try {
-        const { projectId, name, amount, voucherNumber, category, remarks } = req.body;
+        const { projectId, name, amount, voucherNumber, category, remarks, paymentMode, bankId, creditorId } = req.body;
 
         // Upload receipt to Cloudinary if file exists
         let receiptUrl = null;
@@ -611,6 +655,9 @@ const createExpense = async (req, res, next) => {
             category: category || 'material',
             remarks,
             receipt: receiptUrl,
+            paymentMode: paymentMode || 'cash',
+            bankId: bankId && bankId !== '' ? bankId : undefined,
+            creditorId: creditorId && creditorId !== '' ? creditorId : undefined,
             addedBy: req.user.userId
         });
 
@@ -621,6 +668,39 @@ const createExpense = async (req, res, next) => {
             projectId,
             { $inc: { expenses: parseFloat(amount) } }
         );
+
+        // If bankId is provided, record transaction in bank
+        if (bankId && bankId !== '') {
+            await BankDetail.findByIdAndUpdate(bankId, {
+                $inc: { currentBalance: -parseFloat(amount) },
+                $push: {
+                    transactions: {
+                        type: 'debit',
+                        amount: parseFloat(amount),
+                        date: new Date(),
+                        description: `Expense: ${name} (Voucher: ${voucherNumber || 'N/A'})`,
+                        refId: newExpense._id,
+                        refModel: 'Expense'
+                    }
+                }
+            });
+        }
+
+        if (creditorId && creditorId !== '') {
+            await Creditor.findByIdAndUpdate(creditorId, {
+                $inc: { currentBalance: -parseFloat(amount) }, // Expense reduces balance (Debit)
+                $push: {
+                    transactions: {
+                        type: 'debit',
+                        amount: parseFloat(amount),
+                        date: date || new Date(),
+                        description: `Expense: ${name} (Voucher: ${voucherNumber})`,
+                        refId: newExpense._id,
+                        refModel: 'Expense'
+                    }
+                }
+            });
+        }
 
         res.status(201).json({
             success: true,
@@ -651,6 +731,23 @@ const deleteExpense = async (req, res, next) => {
             expense.projectId,
             { $inc: { expenses: -expense.amount } }
         );
+
+        // If expense was paid via bank, reverse the transaction
+        if (expense.bankId) {
+            await BankDetail.findByIdAndUpdate(expense.bankId, {
+                $inc: { currentBalance: expense.amount },
+                $push: {
+                    transactions: {
+                        type: 'credit',
+                        amount: expense.amount,
+                        date: new Date(),
+                        description: `Reversal of expense: ${expense.name} (Deleted)`,
+                        refId: expense._id,
+                        refModel: 'Expense'
+                    }
+                }
+            });
+        }
 
         await expense.deleteOne();
 
@@ -781,7 +878,7 @@ const getContractorPayments = async (req, res, next) => {
 
 const createContractorPayment = async (req, res, next) => {
     try {
-        const { contractorId, amount, date, remarks, paymentMode } = req.body;
+        const { contractorId, contractorName, date, amount, paymentMode, remark, machineRent, rentDeducted, bankId, creditorId } = req.body;
         const userId = req.user.userId;
 
         const contractor = await Contractor.findById(contractorId);
@@ -795,9 +892,13 @@ const createContractorPayment = async (req, res, next) => {
             contractorName: contractor.name,
             amount: parseFloat(amount),
             date: date || Date.now(),
-            remark: remarks,
+            remark: remark,
             paymentMode: paymentMode || 'cash',
-            recordedBy: userId
+            bankId: bankId && bankId !== '' ? bankId : undefined,
+            creditorId: creditorId && creditorId !== '' ? creditorId : undefined,
+            recordedBy: userId,
+            machineRent: machineRent ? parseFloat(machineRent) : 0,
+            rentDeducted: rentDeducted ? parseFloat(rentDeducted) : 0
         });
         await payment.save();
 
@@ -815,6 +916,42 @@ const createContractorPayment = async (req, res, next) => {
         }
 
         await contractor.save();
+
+        // If bankId is provided, record transaction in bank
+        if (bankId && bankId !== '') {
+            await BankDetail.findByIdAndUpdate(bankId, {
+                $inc: { currentBalance: -paidAmount },
+                $push: {
+                    transactions: {
+                        type: 'debit',
+                        amount: paidAmount,
+                        date: date || new Date(),
+                        description: `Payment to contractor: ${contractor.name}`,
+                        refId: payment._id,
+                        refModel: 'ContractorPayment'
+                    }
+                }
+            });
+        }
+
+        // If creditorId is provided (Credit Payment), update creditor balance
+        if (creditorId && creditorId !== '') {
+            await Creditor.findByIdAndUpdate(creditorId, {
+                $inc: { currentBalance: -parseFloat(paidAmount) }, // Payment reduces balance (Debit)
+                $push: {
+                    transactions: {
+                        type: 'debit',
+                        amount: parseFloat(paidAmount),
+                        date: date || new Date(),
+                        description: `Payment to contractor: ${contractor.name}`,
+                        refId: payment._id,
+                        refModel: 'ContractorPayment'
+                    }
+                }
+            });
+        }
+
+
 
         res.status(201).json({
             success: true,
@@ -1528,10 +1665,33 @@ const addTransaction = async (req, res, next) => {
             paymentMode: paymentMode || 'cash',
             date: date || new Date(),
             addedBy: req.user.userId,
-            bankId: req.body.bankId || null
+            bankId: req.body.bankId || null,
+            creditorId: req.body.creditorId || null
         });
 
         await transaction.save();
+
+        // Update Creditor if creditorId is present
+        if (req.body.creditorId) {
+            const isCredit = (type || 'debit') === 'credit';
+            // Credit means Money IN (Deposit) -> We took money from Creditor -> Liability INCREASES (+)
+            // Debit means Money OUT (Withdrawal) -> We paid Creditor -> Liability DECREASES (-)
+            const balanceChange = isCredit ? parseFloat(amount) : -parseFloat(amount);
+
+            await Creditor.findByIdAndUpdate(req.body.creditorId, {
+                $inc: { currentBalance: balanceChange },
+                $push: {
+                    transactions: {
+                        type: isCredit ? 'credit' : 'debit',
+                        amount: parseFloat(amount),
+                        date: date || new Date(),
+                        description: description || 'Account Transaction',
+                        refId: transaction._id,
+                        refModel: 'Transaction' // Or 'AccountTransaction'
+                    }
+                }
+            });
+        }
 
         res.json({
             success: true,
@@ -1570,6 +1730,23 @@ const allocateFunds = async (req, res, next) => {
         });
 
         await transaction.save();
+
+        // If bankId is provided, record transaction in bank
+        if (req.body.bankId) {
+            await BankDetail.findByIdAndUpdate(req.body.bankId, {
+                $inc: { currentBalance: -parseFloat(amount) },
+                $push: {
+                    transactions: {
+                        type: 'debit',
+                        amount: parseFloat(amount),
+                        date: new Date(),
+                        description: description || `Wallet allocation to ${manager.name}`,
+                        refId: transaction._id,
+                        refModel: 'Transaction'
+                    }
+                }
+            });
+        }
 
         res.json({
             success: true,
@@ -1965,18 +2142,97 @@ const getBankDetailWithTransactions = async (req, res, next) => {
             });
         }
 
-        // Fetch transactions linked to this bank
-        // We match explicitly on bankId OR if description contains bank name (backward compatibility if needed, but sticking to new schema is safer)
-        const transactions = await Transaction.find({ bankId: id })
-            .populate('addedBy', 'name role')
-            .sort('-date')
-            .lean();
+        // Fetch transactions from ALL sources linked to this bank
+        // 1. Manual Transactions
+        // 2. Expenses
+        // 3. Vendor Payments
+        // 4. Contractor Payments
+        // 5. Labour Payments
+
+        const [manualTransactions, expenses, vendorPayments, contractorPayments, labourPayments] = await Promise.all([
+            Transaction.find({ bankId: id }).populate('addedBy', 'name role').lean(),
+            Expense.find({ bankId: id }).lean(),
+            VendorPayment.find({ bankId: id }).lean(),
+            ContractorPayment.find({ bankId: id }).lean(),
+            LabourPayment.find({ bankId: id }).lean()
+        ]);
+
+        // Normalize data
+        const allTransactions = [
+            ...manualTransactions.map(t => ({
+                ...t,
+                source: 'Manual Transaction',
+                amount: t.amount,
+                type: t.type
+            })),
+            ...expenses.map(e => ({
+                _id: e._id,
+                date: e.createdAt,
+                description: `Expense: ${e.name} (${e.category})`,
+                amount: e.amount,
+                type: 'debit',
+                category: 'expense',
+                source: 'Expense',
+                paymentMode: e.paymentMode,
+                bankId: e.bankId
+            })),
+            ...vendorPayments.map(v => ({
+                _id: v._id,
+                date: v.date,
+                description: `Vendor Payment`, // Can fetch vendor name if populated, but keeping simple for now
+                amount: v.amount,
+                type: 'debit',
+                category: 'expense',
+                source: 'Vendor Payment',
+                paymentMode: v.paymentMode,
+                bankId: v.bankId
+            })),
+            ...contractorPayments.map(c => ({
+                _id: c._id,
+                date: c.date,
+                description: `Contractor Payment: ${c.contractorName}`,
+                amount: c.amount,
+                type: 'debit',
+                category: 'expense',
+                source: 'Contractor Payment',
+                paymentMode: c.paymentMode,
+                bankId: c.bankId
+            })),
+            ...labourPayments.map(l => ({
+                _id: l._id,
+                date: l.createdAt, // LabourPayment schema has timestamps
+                description: `Labour Payment`,
+                amount: l.finalAmount,
+                type: 'debit',
+                category: 'expense',
+                source: 'Labour Payment',
+                paymentMode: l.paymentMode,
+                bankId: l.bankId
+            }))
+        ];
+
+        // Sort by date (newest first)
+        allTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+        // Calculate totals
+        const totalCredit = allTransactions
+            .filter(t => t.type === 'credit')
+            .reduce((sum, t) => sum + (t.amount || 0), 0);
+
+        const totalDebit = allTransactions
+            .filter(t => t.type === 'debit')
+            .reduce((sum, t) => sum + (t.amount || 0), 0);
 
         res.json({
             success: true,
             data: {
                 bank,
-                transactions
+                transactions: allTransactions,
+                summary: {
+                    totalCredit,
+                    totalDebit,
+                    netBalance: totalCredit - totalDebit
+                }
             }
         });
     } catch (error) {
@@ -2071,7 +2327,7 @@ module.exports = {
     getConsumableGoods,
     addEquipment,
     getEquipments,
-    getBankDetails,
+    addBankDetail,
     getBankDetailWithTransactions,
-    addBankDetail
+    getBankDetails
 };
