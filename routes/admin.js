@@ -51,8 +51,6 @@ const {
   deleteContractor,
   getContractorPayments,
   createContractorPayment,
-  assignContractorToRoad,
-  getContractorRoadAssignments,
   getTransfers,
   createTransfer,
   getAccounts,
@@ -75,7 +73,14 @@ const {
   allocateFunds,
   getBankDetails,
   addBankDetail,
-  getBankDetailWithTransactions
+  getBankDetailWithTransactions,
+  transferBankToBank,
+  deleteTransaction,
+  deleteVendorPayment,
+  deleteContractorPayment,
+  createItemName,
+  getItemNames,
+  deleteItemName
 } = require('../controllers/adminController');
 
 const {
@@ -124,6 +129,7 @@ router.post('/vendors', uploadMultiple, vendorValidation, createVendor);
 router.put('/vendors/:id', updateVendor);
 router.delete('/vendors/:id', deleteVendor);
 router.post('/vendors/payment', uploadReceipt, recordVendorPayment);
+router.delete('/vendors/payments/:id', deleteVendorPayment);
 router.get('/vendors/:vendorId/payments', getVendorPayments);
 
 // Expenses
@@ -144,6 +150,7 @@ router.put('/contractors/:id', updateContractor);
 router.delete('/contractors/:id', deleteContractor);
 router.get('/contractors/:contractorId/payments', getContractorPayments);
 router.post('/contractors/payments', createContractorPayment);
+router.delete('/contractors/payments/:id', deleteContractorPayment);
 
 // Transfers
 router.get('/transfers', getTransfers);
@@ -153,6 +160,7 @@ router.post('/transfers', createTransfer);
 router.get('/accounts', getAccounts);
 router.post('/accounts/capital', addCapital);
 router.post('/accounts/transaction', addTransaction);
+router.delete('/accounts/transaction/:id', deleteTransaction);
 router.post('/accounts/allocate', allocateFunds);
 
 // Reports
@@ -187,7 +195,17 @@ router.get('/bank-details', isAuthenticated, isAdmin, getBankDetails);
 router.post('/bank-details', isAuthenticated, isAdmin, addBankDetail); // Add ID validation if needed
 router.put('/bank-details/:id', isAuthenticated, isAdmin, updateBankDetail);
 router.delete('/bank-details/:id', isAuthenticated, isAdmin, deleteBankDetail);
+router.delete('/bank-details/:id', isAuthenticated, isAdmin, deleteBankDetail);
 router.get('/bank-details/:id', isAuthenticated, isAdmin, getBankDetailWithTransactions);
+router.post('/bank-details/transfer', isAuthenticated, isAdmin, transferBankToBank);
+
+// ============ CREDITORS ============
+router.post('/bank-details/transfer', isAuthenticated, isAdmin, transferBankToBank);
+
+// Item Names (Stock Detail)
+router.post('/item-names', createItemName);
+router.get('/item-names', getItemNames);
+router.delete('/item-names/:id', deleteItemName);
 
 // ============ CREDITORS ============
 router.get('/creditors', isAuthenticated, isAdmin, getCreditors);

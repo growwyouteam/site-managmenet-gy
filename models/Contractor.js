@@ -34,7 +34,7 @@ const contractorSchema = new mongoose.Schema({
     }],
     status: {
         type: String,
-        enum: ['pending', 'complete'],
+        enum: ['pending', 'complete', 'active', 'inactive'],
         default: 'pending'
     },
     pendingAmount: {

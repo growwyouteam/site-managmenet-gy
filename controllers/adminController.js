@@ -4,7 +4,7 @@
  */
 
 const mongoose = require('mongoose');
-const { User, Project, Vendor, VendorPayment, Expense, Labour, Contractor, ContractorPayment, LabourPayment, Machine, Stock, LabEquipment, ConsumableGoods, Equipment, Transaction, Transfer, BankDetail, Creditor, Attendance, LabourAttendance } = require('../models');
+const { User, Project, Vendor, VendorPayment, Expense, Labour, Contractor, ContractorPayment, LabourPayment, Machine, Stock, LabEquipment, ConsumableGoods, Equipment, Transaction, Transfer, BankDetail, Creditor, Attendance, LabourAttendance, ItemName } = require('../models');
 
 // ============ DASHBOARD ============
 
@@ -638,7 +638,7 @@ const getExpenses = async (req, res, next) => {
 // Create new expense
 const createExpense = async (req, res, next) => {
     try {
-        const { projectId, name, amount, voucherNumber, category, remarks, paymentMode, bankId, creditorId } = req.body;
+        const { projectId, name, amount, voucherNumber, category, remarks, paymentMode, bankId, creditorId, date } = req.body;
 
         // Upload receipt to Cloudinary if file exists
         let receiptUrl = null;
@@ -1016,11 +1016,22 @@ const updateMachine = async (req, res, next) => {
     try {
         const { id } = req.params;
 
+        // Upload photo to Cloudinary if file exists
+        let machinePhotoUrl = undefined;
+        if (req.file) {
+            const { uploadToCloudinary } = require('../config/cloudinary');
+            machinePhotoUrl = await uploadToCloudinary(req.file.buffer, 'machines');
+        }
+
         // Sanitize projectId
         const updateData = {
             ...req.body,
             projectId: req.body.projectId && req.body.projectId.trim() !== '' ? req.body.projectId : null
         };
+
+        if (machinePhotoUrl) {
+            updateData.machinePhoto = machinePhotoUrl;
+        }
 
         const machine = await Machine.findByIdAndUpdate(id, updateData, { new: true });
         if (!machine) {
@@ -1524,6 +1535,8 @@ const getAccounts = async (req, res, next) => {
         // Add manual transactions
         manualTransactions.forEach(t => {
             allTransactions.push({
+                _id: t._id,
+                refModel: 'Transaction',
                 date: ensureDate(t.date),
                 description: t.description,
                 amount: t.amount,
@@ -1540,6 +1553,8 @@ const getAccounts = async (req, res, next) => {
             if (managerId && e.addedBy?._id?.toString() !== managerId) return;
 
             allTransactions.push({
+                _id: e._id,
+                refModel: 'Expense',
                 date: ensureDate(e.createdAt),
                 description: `${e.name}${e.projectId ? ` - ${e.projectId.name}` : ''}`,
                 amount: e.amount || 0,
@@ -1553,6 +1568,8 @@ const getAccounts = async (req, res, next) => {
         // Add vendor payments as debit transactions
         vendorPayments.forEach(vp => {
             allTransactions.push({
+                _id: vp._id,
+                refModel: 'VendorPayment',
                 date: ensureDate(vp.date, vp.createdAt),
                 description: `Payment to ${vp.vendorId?.name || 'Vendor'}${vp.remark ? ` - ${vp.remark}` : ''}`,
                 amount: vp.amount || 0,
@@ -1566,6 +1583,8 @@ const getAccounts = async (req, res, next) => {
         // Add contractor payments as debit transactions
         contractorPayments.forEach(cp => {
             allTransactions.push({
+                _id: cp._id,
+                refModel: 'ContractorPayment',
                 date: ensureDate(cp.date, cp.createdAt),
                 description: `Payment to ${cp.contractorName}${cp.remark ? ` - ${cp.remark}` : ''}`,
                 amount: cp.amount || 0,
@@ -1579,6 +1598,8 @@ const getAccounts = async (req, res, next) => {
         // Add labour payments as debit transactions
         labourPayments.forEach(lp => {
             allTransactions.push({
+                _id: lp._id,
+                refModel: 'LabourPayment',
                 date: ensureDate(lp.date, lp.createdAt),
                 description: `Payment to ${lp.labourId?.name || 'Labour'}${lp.remarks ? ` - ${lp.remarks}` : ''}`,
                 amount: lp.amount || 0,
@@ -2272,6 +2293,238 @@ const addBankDetail = async (req, res, next) => {
     }
 };
 
+
+// Transfer funds between banks
+const transferBankToBank = async (req, res, next) => {
+    try {
+        const { sourceBankId, destBankId, amount, date, description } = req.body;
+
+        if (!sourceBankId || !destBankId || !amount) {
+            return res.status(400).json({ success: false, error: 'Missing required fields' });
+        }
+
+        if (sourceBankId === destBankId) {
+            return res.status(400).json({ success: false, error: 'Source and Destination banks cannot be same' });
+        }
+
+        const sourceBank = await BankDetail.findById(sourceBankId);
+        const destBank = await BankDetail.findById(destBankId);
+
+        if (!sourceBank || !destBank) {
+            return res.status(404).json({ success: false, error: 'Bank not found' });
+        }
+
+        // Create Debit Transaction (Source)
+        const debitTransaction = new Transaction({
+            amount: parseFloat(amount),
+            type: 'debit',
+            category: 'other',
+            description: `Transfer to ${destBank.bankName} - ${description || ''}`,
+            paymentMode: 'bank',
+            date: date || new Date(),
+            addedBy: req.user.userId,
+            bankId: sourceBankId
+        });
+
+        // Create Credit Transaction (Destination)
+        const creditTransaction = new Transaction({
+            amount: parseFloat(amount),
+            type: 'credit',
+            category: 'other',
+            description: `Transfer from ${sourceBank.bankName} - ${description || ''}`,
+            paymentMode: 'bank',
+            date: date || new Date(),
+            addedBy: req.user.userId,
+            bankId: destBankId
+        });
+
+        await debitTransaction.save();
+        await creditTransaction.save();
+
+        res.json({
+            success: true,
+            message: 'Transfer successful',
+            data: { debit: debitTransaction, credit: creditTransaction }
+        });
+
+    } catch (error) {
+        console.error('Error transferring funds:', error);
+        next(error);
+    }
+};
+
+
+
+const deleteTransaction = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const transaction = await Transaction.findById(id);
+
+        if (!transaction) return res.status(404).json({ success: false, error: 'Transaction not found' });
+
+        // Reverse Creditor update if applicable
+        if (transaction.creditorId) {
+            const isCredit = transaction.type === 'credit';
+            const balanceChange = isCredit ? -transaction.amount : transaction.amount;
+            await Creditor.findByIdAndUpdate(transaction.creditorId, {
+                $inc: { currentBalance: balanceChange },
+                $pull: { transactions: { refId: transaction._id } }
+            });
+        }
+
+        await transaction.deleteOne();
+
+        res.json({ success: true, message: 'Transaction deleted successfully' });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const deleteVendorPayment = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const payment = await VendorPayment.findById(id);
+        if (!payment) return res.status(404).json({ success: false, error: 'Payment not found' });
+
+        const vendor = await Vendor.findById(payment.vendorId);
+        if (vendor) {
+            let amountLeft = payment.amount;
+
+            if (vendor.advancePayment > 0) {
+                const reduceAdv = Math.min(vendor.advancePayment, amountLeft);
+                vendor.advancePayment -= reduceAdv;
+                amountLeft -= reduceAdv;
+            }
+
+            if (amountLeft > 0) {
+                vendor.pendingAmount = (vendor.pendingAmount || 0) + amountLeft;
+            }
+
+            await vendor.save();
+        }
+
+        // Reverse Bank
+        if (payment.bankId) {
+            await BankDetail.findByIdAndUpdate(payment.bankId, {
+                $inc: { currentBalance: payment.amount }, // Credit back
+                $push: {
+                    transactions: {
+                        type: 'credit',
+                        amount: payment.amount,
+                        date: new Date(),
+                        description: `Reversal of vendor payment (Deleted)`,
+                        refId: payment._id,
+                        refModel: 'VendorPayment'
+                    }
+                }
+            });
+        }
+
+        // Reverse Creditor
+        if (payment.creditorId) {
+            await Creditor.findByIdAndUpdate(payment.creditorId, {
+                $inc: { currentBalance: payment.amount }, // Credit back (Liability increases)
+                $pull: { transactions: { refId: payment._id } }
+            });
+        }
+
+        await payment.deleteOne();
+        res.json({ success: true, message: 'Vendor payment deleted' });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const deleteContractorPayment = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const payment = await ContractorPayment.findById(id);
+        if (!payment) return res.status(404).json({ success: false, error: 'Payment not found' });
+
+        const contractor = await Contractor.findById(payment.contractorId);
+        if (contractor) {
+            let amountLeft = payment.amount;
+            if (contractor.advancePayment > 0) {
+                const reduceAdv = Math.min(contractor.advancePayment, amountLeft);
+                contractor.advancePayment -= reduceAdv;
+                amountLeft -= reduceAdv;
+            }
+            if (amountLeft > 0) {
+                contractor.pendingAmount = (contractor.pendingAmount || 0) + amountLeft;
+            }
+            await contractor.save();
+        }
+
+        // Reverse Bank
+        if (payment.bankId) {
+            await BankDetail.findByIdAndUpdate(payment.bankId, {
+                $inc: { currentBalance: payment.amount },
+                $push: {
+                    transactions: {
+                        type: 'credit',
+                        amount: payment.amount,
+                        date: new Date(),
+                        description: `Reversal of contractor payment (Deleted)`,
+                        refId: payment._id,
+                        refModel: 'ContractorPayment'
+                    }
+                }
+            });
+        }
+
+        // Reverse Creditor
+        if (payment.creditorId) {
+            await Creditor.findByIdAndUpdate(payment.creditorId, {
+                $inc: { currentBalance: payment.amount },
+                $pull: { transactions: { refId: payment._id } }
+            });
+        }
+
+        await payment.deleteOne();
+        res.json({ success: true, message: 'Contractor payment deleted' });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const createItemName = async (req, res, next) => {
+    try {
+        const { name, category } = req.body;
+        if (!name || !category) {
+            return res.status(400).json({ success: false, error: 'Name and Category are required' });
+        }
+        const itemName = new ItemName({ name, category });
+        await itemName.save();
+        res.status(201).json({ success: true, data: itemName });
+    } catch (error) {
+        if (error.code === 11000) {
+            return res.status(400).json({ success: false, error: 'Item name already exists in this category' });
+        }
+        next(error);
+    }
+};
+
+const getItemNames = async (req, res, next) => {
+    try {
+        const { category } = req.query;
+        const query = category ? { category } : {};
+        const names = await ItemName.find(query).sort('name');
+        res.json({ success: true, data: names });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const deleteItemName = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        await ItemName.findByIdAndDelete(id);
+        res.json({ success: true, message: 'Item name deleted successfully' });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getDashboard,
     getProjects,
@@ -2329,5 +2582,14 @@ module.exports = {
     getEquipments,
     addBankDetail,
     getBankDetailWithTransactions,
-    getBankDetails
+    getBankDetails,
+    transferBankToBank,
+    deleteTransaction,
+    deleteVendorPayment,
+    deleteContractorPayment,
+
+    // Item Names (Stock Detail)
+    createItemName,
+    getItemNames,
+    deleteItemName
 };
