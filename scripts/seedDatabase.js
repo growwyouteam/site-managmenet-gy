@@ -8,15 +8,7 @@ require('dotenv').config();
 const mongoose = require('mongoose');
 const { User, Project, Vendor, Labour } = require('../models');
 
-const connectDB = async () => {
-    try {
-        await mongoose.connect(process.env.MONGODB_URI);
-        console.log('✅ MongoDB Connected');
-    } catch (error) {
-        console.error('❌ MongoDB Connection Error:', error.message);
-        process.exit(1);
-    }
-};
+const connectDB = require('../config/database-fallback');
 
 const seedData = async () => {
     try {

@@ -45,7 +45,9 @@ const {
   getMaterials,
   getLabEquipments,
   getConsumableGoods,
-  getEquipments
+  getEquipments,
+  getSiteMachines,
+  toggleMachineRentPause
 } = require('../controllers/siteController');
 
 // Apply authentication and site manager middleware to all routes
@@ -123,5 +125,9 @@ router.get('/consumable-goods', getConsumableGoods);
 
 // Equipment
 router.get('/equipments', getEquipments);
+
+// Site Manager Machines
+router.get('/site-machines', getSiteMachines);
+router.put('/machines/:id/pause', toggleMachineRentPause);
 
 module.exports = router;

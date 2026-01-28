@@ -3,7 +3,8 @@
  * Handles all site manager-specific operations with MongoDB
  */
 
-const { User, Project, Vendor, Expense, Labour, LabourAttendance, LabourPayment, Stock, StockOut, Machine, Transfer, DailyReport, LabEquipment, ConsumableGoods, Equipment, Attendance } = require('../models');
+const { User, Project, Vendor, Expense, Labour, LabourAttendance, LabourPayment, Stock, StockOut, Machine, Transfer, DailyReport, LabEquipment, ConsumableGoods, Equipment, Attendance, Contractor } = require('../models');
+const Notification = require('../models/Notification');
 
 // ============ DASHBOARD ============
 
@@ -303,7 +304,7 @@ const getLabourAttendance = async (req, res, next) => {
 
 const addStockIn = async (req, res, next) => {
     try {
-        const { projectId, vendorId, materialName, unit, quantity, unitPrice, remarks } = req.body;
+        const { projectId, vendorId, materialName, unit, quantity, unitPrice, remarks, paymentStatus } = req.body;
         const userId = req.user.userId;
 
         const user = await User.findById(userId);
@@ -324,6 +325,20 @@ const addStockIn = async (req, res, next) => {
 
         const totalPrice = parseFloat(quantity) * parseFloat(unitPrice);
 
+        // Check wallet balance if payment is 'paid'
+        if (paymentStatus === 'paid') {
+            if (user.walletBalance < totalPrice) {
+                return res.status(400).json({
+                    success: false,
+                    error: `Insufficient wallet balance. Current: ₹${user.walletBalance}`
+                });
+            }
+
+            // Deduct from wallet
+            user.walletBalance -= totalPrice;
+            await user.save();
+        }
+
         // Upload photo to Cloudinary if file exists
         let photoUrl = null;
         if (req.file) {
@@ -341,22 +356,24 @@ const addStockIn = async (req, res, next) => {
             totalPrice,
             photo: photoUrl,
             remarks,
-            addedBy: userId
+            addedBy: userId,
+            paymentStatus: paymentStatus || 'credit' // Optional: Save status in Stock model if schema supports it
         });
 
         await newStock.save();
 
-        // Update vendor's totalSupplied and pendingAmount
+        // Update vendor's Stats
         if (vendorId) {
-            await Vendor.findByIdAndUpdate(
-                vendorId,
-                {
-                    $inc: {
-                        totalSupplied: totalPrice,
-                        pendingAmount: totalPrice
-                    }
-                }
-            );
+            const update = {
+                $inc: { totalSupplied: totalPrice }
+            };
+
+            // Only increase pending amount if NOT paid
+            if (paymentStatus !== 'paid') {
+                update.$inc.pendingAmount = totalPrice;
+            }
+
+            await Vendor.findByIdAndUpdate(vendorId, update);
         }
 
         res.status(201).json({
@@ -580,6 +597,21 @@ const getExpenses = async (req, res, next) => {
 const addExpense = async (req, res, next) => {
     try {
         const { projectId, name, amount, voucherNumber, category, remarks } = req.body;
+        const userId = req.user.userId;
+        const expenseAmount = parseFloat(amount);
+
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ success: false, error: 'User not found' });
+        }
+
+        // Check sufficient balance
+        if (user.walletBalance < expenseAmount) {
+            return res.status(400).json({
+                success: false,
+                error: `Insufficient wallet balance. Current: ₹${user.walletBalance}`
+            });
+        }
 
         // Upload receipt to Cloudinary if file exists
         let receiptUrl = null;
@@ -588,15 +620,19 @@ const addExpense = async (req, res, next) => {
             receiptUrl = await uploadToCloudinary(req.file.buffer, 'expenses');
         }
 
+        // Deduct from wallet
+        user.walletBalance -= expenseAmount;
+        await user.save();
+
         const newExpense = new Expense({
             projectId,
             name,
-            amount: parseFloat(amount),
+            amount: expenseAmount,
             voucherNumber,
             category: category || 'material',
             remarks,
             receipt: receiptUrl,
-            addedBy: req.user.userId
+            addedBy: userId
         });
 
         await newExpense.save();
@@ -604,7 +640,7 @@ const addExpense = async (req, res, next) => {
         // Update project expenses
         await Project.findByIdAndUpdate(
             projectId,
-            { $inc: { expenses: parseFloat(amount) } }
+            { $inc: { expenses: expenseAmount } }
         );
 
         res.status(201).json({
@@ -663,6 +699,28 @@ const requestTransfer = async (req, res, next) => {
 
         const transfer = new Transfer(transferData);
         await transfer.save();
+
+        // NOTIFICATION TRIGGER
+        try {
+            const admins = await User.find({ role: 'admin' });
+            const itemLabel = transferData.materialName || 'Item'; // Fallback
+            const sourceProj = await Project.findById(fromProject);
+            const destProj = await Project.findById(toProject);
+
+            for (const admin of admins) {
+                await Notification.create({
+                    recipient: admin._id,
+                    title: 'New Transfer Request',
+                    message: `Transfer of ${quantity} ${itemLabel} from ${sourceProj?.name} to ${destProj?.name} requested.`,
+                    type: 'info',
+                    link: '/admin/transfer',
+                    relatedId: transfer._id,
+                    relatedModel: 'Transfer'
+                });
+            }
+        } catch (notifError) {
+            console.error('Failed to send notification:', notifError);
+        }
 
         // EXECUTE TRANSFER (Move Items Immediately)
         if (type === 'labour') {
@@ -849,6 +907,7 @@ const getMaterials = async (req, res, next) => {
 
 // ============ PAYMENT ============
 
+// Pay labour
 const payLabour = async (req, res, next) => {
     try {
         const { labourId, amount, deduction, advance, paymentMode, remarks } = req.body;
@@ -864,9 +923,28 @@ const payLabour = async (req, res, next) => {
             return res.status(400).json({ success: false, error: 'Amount or Advance must be greater than 0' });
         }
 
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ success: false, error: 'User not found' });
+        }
+
         const labour = await Labour.findById(labourId);
         if (!labour) {
             return res.status(404).json({ success: false, error: 'Labour not found' });
+        }
+
+        // Check sufficient balance if final amount > 0 AND payment is cash
+        if (finalAmount > 0 && paymentMode === 'cash') {
+            if (user.walletBalance < finalAmount) {
+                return res.status(400).json({
+                    success: false,
+                    error: `Insufficient wallet balance. Current: ₹${user.walletBalance}`
+                });
+            }
+
+            // Deduct from wallet
+            user.walletBalance -= finalAmount;
+            await user.save();
         }
 
         const payment = new LabourPayment({
@@ -941,11 +1019,46 @@ const getPayments = async (req, res, next) => {
 // ============ NOTIFICATIONS ============
 
 const getNotifications = async (req, res, next) => {
-    res.json({ success: true, data: [] });
+    try {
+        const userId = req.user.userId;
+        const notifications = await Notification.find({ recipient: userId })
+            .sort('-createdAt')
+            .limit(50);
+
+        const unreadCount = await Notification.countDocuments({ recipient: userId, read: false });
+
+        res.json({
+            success: true,
+            data: notifications,
+            unreadCount
+        });
+    } catch (error) {
+        next(error);
+    }
 };
 
 const markNotificationRead = async (req, res, next) => {
-    res.json({ success: true, message: 'Feature coming soon' });
+    try {
+        const { id } = req.params;
+        const userId = req.user.userId;
+
+        // Mark specific or all
+        if (id === 'all') {
+            await Notification.updateMany(
+                { recipient: userId, read: false },
+                { read: true }
+            );
+        } else {
+            await Notification.findOneAndUpdate(
+                { _id: id, recipient: userId },
+                { read: true }
+            );
+        }
+
+        res.json({ success: true, message: 'Marked as read' });
+    } catch (error) {
+        next(error);
+    }
 };
 
 // ============ PROFILE ============
@@ -1396,6 +1509,96 @@ const getEquipments = async (req, res, next) => {
     }
 };
 
+
+// Get machines assigned to site manager's projects
+const getSiteMachines = async (req, res, next) => {
+    try {
+        const { userId } = req.user;
+        const user = await User.findById(userId);
+
+        if (!user || !user.assignedSites || user.assignedSites.length === 0) {
+            console.log('⚠️ User has no assigned sites:', user);
+            return res.json({
+                success: true,
+                data: [],
+                message: 'No projects assigned to this user'
+            });
+        }
+
+        // 1. Find all contractors assigned to these sites
+        const contractors = await Contractor.find({
+            assignedProjects: { $in: user.assignedSites }
+        });
+        const contractorIds = contractors.map(c => c._id);
+
+        // 2. Find machines assigned to these sites OR to these contractors
+        const machines = await Machine.find({
+            $or: [
+                { projectId: { $in: user.assignedSites } },
+                { assignedToContractor: { $in: contractorIds } }
+            ],
+            status: { $in: ['in-use', 'available'] }
+        })
+            .populate('assignedToContractor', 'name') // Populate contractor details if needed
+            .sort('-createdAt');
+
+        res.json({
+            success: true,
+            data: machines
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// Toggle machine rent pause
+const toggleMachineRentPause = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const machine = await Machine.findById(id);
+
+        if (!machine) {
+            return res.status(404).json({
+                success: false,
+                error: 'Machine not found'
+            });
+        }
+
+        if (machine.isRentPaused) {
+            // RESUME RENT
+            const now = new Date();
+            const pausedAt = new Date(machine.rentPausedAt);
+            const durationHours = (now - pausedAt) / (1000 * 60 * 60);
+
+            machine.rentPausedHistory.push({
+                pausedAt: machine.rentPausedAt,
+                resumedAt: now,
+                duration: durationHours
+            });
+            machine.isRentPaused = false;
+            machine.rentPausedAt = null;
+        } else {
+            // PAUSE RENT
+            machine.isRentPaused = true;
+            machine.rentPausedAt = new Date();
+        }
+
+        await machine.save();
+
+        res.json({
+            success: true,
+            message: machine.isRentPaused ? 'Machine rent paused' : 'Machine rent resumed',
+            data: {
+                isRentPaused: machine.isRentPaused,
+                rentPausedAt: machine.rentPausedAt
+            }
+        });
+
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getDashboard,
     markAttendance,
@@ -1430,5 +1633,7 @@ module.exports = {
     getMaterials,
     getLabEquipments,
     getConsumableGoods,
-    getEquipments
+    getEquipments,
+    getSiteMachines,
+    toggleMachineRentPause
 };

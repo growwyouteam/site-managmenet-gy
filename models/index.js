@@ -25,5 +25,6 @@ module.exports = {
     BankDetail: require('./BankDetail'),
     Creditor: require('./Creditor'),
     Attendance: require('./Attendance'),
-    ItemName: require('./ItemName')
+    ItemName: require('./ItemName'),
+    Notification: require('./Notification')
 };

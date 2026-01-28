@@ -113,7 +113,7 @@ router.delete('/projects/:id', deleteProject);
 // Machines
 router.get('/machines', getMachines);
 router.post('/machines', uploadSingle, machineValidation, createMachine);
-router.put('/machines/:id', updateMachine);
+router.put('/machines/:id', uploadSingle, updateMachine);
 router.delete('/machines/:id', deleteMachine);
 router.post('/machines/:id/return', returnRentedMachine);
 

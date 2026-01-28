@@ -4,7 +4,7 @@
  */
 
 const mongoose = require('mongoose');
-const { User, Project, Vendor, VendorPayment, Expense, Labour, Contractor, ContractorPayment, LabourPayment, Machine, Stock, LabEquipment, ConsumableGoods, Equipment, Transaction, Transfer, BankDetail, Creditor, Attendance, LabourAttendance, ItemName } = require('../models');
+const { User, Project, Vendor, VendorPayment, Expense, Labour, Contractor, ContractorPayment, LabourPayment, Machine, Stock, LabEquipment, ConsumableGoods, Equipment, Transaction, Transfer, BankDetail, Creditor, Attendance, LabourAttendance, ItemName, Notification } = require('../models');
 
 // ============ DASHBOARD ============
 
@@ -1026,7 +1026,7 @@ const updateMachine = async (req, res, next) => {
         // Sanitize projectId
         const updateData = {
             ...req.body,
-            projectId: req.body.projectId && req.body.projectId.trim() !== '' ? req.body.projectId : null
+            projectId: req.body.projectId && String(req.body.projectId).trim() !== '' ? req.body.projectId : null
         };
 
         if (machinePhotoUrl) {
@@ -1739,6 +1739,10 @@ const allocateFunds = async (req, res, next) => {
             });
         }
 
+        // Update manager's wallet balance
+        manager.walletBalance = (manager.walletBalance || 0) + parseFloat(amount);
+        await manager.save();
+
         // Create transaction record
         const transaction = new Transaction({
             category: 'wallet_allocation',
@@ -1747,7 +1751,9 @@ const allocateFunds = async (req, res, next) => {
             type: 'debit',
             paymentMode: paymentMode || 'bank',
             date: new Date(),
-            bankId: req.body.bankId || null
+            bankId: req.body.bankId || null,
+            relatedId: manager._id,
+            onModel: 'User'
         });
 
         await transaction.save();
@@ -1913,16 +1919,112 @@ const getLabourPayments = async (req, res, next) => {
     }
 };
 
-const getNotifications = async (req, res, next) => {
-    res.json({ success: true, data: [] });
+// Helper to create notification (Internal Use)
+const createNotification = async ({ recipientId, title, message, type = 'info', link, relatedId, relatedModel }) => {
+    try {
+        await Notification.create({
+            recipient: recipientId,
+            title,
+            message,
+            type,
+            link,
+            relatedId,
+            relatedModel
+        });
+        console.log(`🔔 Notification sent to ${recipientId}: ${title}`);
+    } catch (error) {
+        console.error('❌ Error creating notification:', error);
+    }
 };
 
+const getNotifications = async (req, res, next) => {
+    try {
+        const userId = req.user.userId;
+        const notifications = await Notification.find({
+            $or: [
+                { recipient: userId }, // Received
+                { relatedId: userId, relatedModel: 'User' } // Sent by me
+            ]
+        })
+            .sort('-createdAt')
+            .limit(50)
+            .populate('relatedId', 'name role'); // optional: see who sent it if relatedModel is User
+
+        const unreadCount = await Notification.countDocuments({ recipient: userId, read: false });
+
+        res.json({
+            success: true,
+            data: notifications,
+            unreadCount
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// API to send notification (e.g. manually from admin or system)
 const sendNotification = async (req, res, next) => {
-    res.json({ success: true, message: 'Feature coming soon' });
+    try {
+        const { recipientId, title, message, type, link } = req.body;
+        const senderId = req.user.userId;
+
+        if (recipientId) {
+            // Send to specific user
+            await createNotification({
+                recipientId,
+                title,
+                message,
+                type,
+                link,
+                relatedId: senderId, // Tracking who sent it
+                relatedModel: 'User'
+            });
+        } else {
+            // Broadcast to all Site Managers
+            const siteManagers = await User.find({ role: 'sitemanager', active: true });
+            const notifications = siteManagers.map(sm => ({
+                recipient: sm._id,
+                title,
+                message,
+                type,
+                link,
+                relatedId: senderId,
+                relatedModel: 'User'
+            }));
+
+            if (notifications.length > 0) {
+                await Notification.insertMany(notifications);
+            }
+        }
+
+        res.json({ success: true, message: 'Notification sent successfully' });
+    } catch (error) {
+        next(error);
+    }
 };
 
 const markNotificationRead = async (req, res, next) => {
-    res.json({ success: true, message: 'Feature coming soon' });
+    try {
+        const { id } = req.params;
+        const userId = req.user.userId;
+
+        // Mark specific or all
+        if (id === 'all') {
+            await Notification.updateMany(
+                { recipient: userId, read: false },
+                { read: true }
+            );
+        } else {
+            await Notification.findOneAndUpdate(
+                { _id: id, recipient: userId },
+                { read: true }
+            );
+        }
+
+        res.json({ success: true, message: 'Marked as read' });
+    } catch (error) {
+        next(error);
+    }
 };
 
 module.exports = {
@@ -2591,5 +2693,13 @@ module.exports = {
     // Item Names (Stock Detail)
     createItemName,
     getItemNames,
-    deleteItemName
+    createItemName,
+    getItemNames,
+    deleteItemName,
+
+    // Notifications
+    createNotification,
+    getNotifications,
+    sendNotification,
+    markNotificationRead
 };
