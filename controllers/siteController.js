@@ -1,9 +1,9 @@
-/**
+﻿/**
  * Site Manager Controller - MongoDB Version
  * Handles all site manager-specific operations with MongoDB
  */
 
-const { User, Project, Vendor, Expense, Labour, LabourAttendance, LabourPayment, Stock, StockOut, Machine, Transfer, DailyReport, LabEquipment, ConsumableGoods, Equipment, Attendance, Contractor, ContractorPayment, VendorPayment, Transaction } = require('../models');
+const { User, Project, Vendor, Expense, Labour, LabourAttendance, LabourPayment, Stock, StockOut, Machine, Transfer, DailyReport, LabEquipment, ConsumableGoods, Equipment, Attendance, Contractor, ContractorPayment, VendorPayment, Transaction, ItemName } = require('../models');
 const Notification = require('../models/Notification');
 
 // ============ DASHBOARD ============
@@ -137,12 +137,24 @@ const getLabours = async (req, res, next) => {
             });
         }
 
-        const { projectId } = req.query;
-        const query = projectId
-            ? { assignedSite: projectId }
-            : { assignedSite: { $in: user.assignedSites || [] } };
+        const { projectId, contractorId } = req.query;
+        const query = {};
 
-        const labours = await Labour.find(query).populate('assignedSite', 'name location');
+        if (projectId) {
+            query.assignedSite = projectId;
+        } else {
+            query.assignedSite = { $in: user.assignedSites || [] };
+        }
+
+        if (contractorId === 'null') {
+            query.contractorId = null; // Site Labour
+        } else if (contractorId) {
+            query.contractorId = contractorId; // Contractor Labour
+        }
+
+        const labours = await Labour.find(query)
+            .populate('assignedSite', 'name location')
+            .populate('contractorId', 'name mobile');
 
         res.json({
             success: true,
@@ -156,7 +168,7 @@ const getLabours = async (req, res, next) => {
 // Enroll new labour
 const enrollLabour = async (req, res, next) => {
     try {
-        const { name, phone, dailyWage, designation, assignedSite } = req.body;
+        const { name, phone, dailyWage, designation, assignedSite, contractorId } = req.body;
 
         const newLabour = new Labour({
             name,
@@ -164,6 +176,7 @@ const enrollLabour = async (req, res, next) => {
             dailyWage: parseFloat(dailyWage),
             designation,
             assignedSite,
+            contractorId: contractorId || null,
             enrolledBy: req.user.userId,
             active: true
         });
@@ -332,8 +345,13 @@ const addStockIn = async (req, res, next) => {
 
         const totalPrice = parseFloat(quantity) * parseFloat(unitPrice);
 
+        let status = paymentStatus;
+        if (Array.isArray(status)) status = status[0];
+        status = (status || 'credit').toLowerCase().trim();
+        console.log(`Stock In Request: Status: ${status}, Total Price: ${totalPrice}, Wallet Balance: ${user.walletBalance}`);
+
         // Check wallet balance if payment is 'paid'
-        if (paymentStatus === 'paid') {
+        if (status === 'paid') {
             if (user.walletBalance < totalPrice) {
                 return res.status(400).json({
                     success: false,
@@ -344,6 +362,7 @@ const addStockIn = async (req, res, next) => {
             // Deduct from wallet
             user.walletBalance -= totalPrice;
             await user.save();
+            console.log(`Wallet deducted. New Balance: ${user.walletBalance}`);
         }
 
         // Upload photo to Cloudinary if file exists
@@ -364,7 +383,7 @@ const addStockIn = async (req, res, next) => {
             photo: photoUrl,
             remarks,
             addedBy: userId,
-            paymentStatus: paymentStatus || 'credit' // Optional: Save status in Stock model if schema supports it
+            paymentStatus: status // Use the cleaned status
         });
 
         await newStock.save();
@@ -406,11 +425,11 @@ const getStocks = async (req, res, next) => {
             });
         }
 
-        console.log('🔍 Site Manager Stocks - User:', user.name, 'assignedSites:', user.assignedSites);
+        console.log('ðŸ” Site Manager Stocks - User:', user.name, 'assignedSites:', user.assignedSites);
 
         // Check if user has assigned sites
         if (!user.assignedSites || user.assignedSites.length === 0) {
-            console.log('ℹ️ No assigned sites for site manager, returning empty stocks');
+            console.log('â„¹ï¸ No assigned sites for site manager, returning empty stocks');
             return res.json({
                 success: true,
                 data: []
@@ -451,14 +470,14 @@ const getStocks = async (req, res, next) => {
             .limit(limit)
             .lean();
 
-        console.log(`✅ Found ${stocks.length} stocks for site manager ${user.name}`);
+        console.log(`âœ… Found ${stocks.length} stocks for site manager ${user.name}`);
 
         res.json({
             success: true,
             data: stocks
         });
     } catch (error) {
-        console.error('❌ Error in getStocks:', error);
+        console.error('âŒ Error in getStocks:', error);
         next(error);
     }
 };
@@ -488,6 +507,27 @@ const recordStockOut = async (req, res, next) => {
             });
         }
 
+        // Upload photos to Cloudinary in parallel
+        let photoUrls = [];
+        if (req.files && req.files.length > 0) {
+            const { uploadToCloudinary } = require('../config/cloudinary');
+
+            // Create array of upload promises
+            const uploadPromises = req.files.map(file =>
+                uploadToCloudinary(file.buffer, 'stock-out')
+                    .catch(error => {
+                        console.error('Error uploading photo:', error);
+                        return null;
+                    })
+            );
+
+            // Wait for all uploads to complete
+            const results = await Promise.all(uploadPromises);
+
+            // Filter out failed uploads
+            photoUrls = results.filter(url => url !== null);
+        }
+
         // Deduct quantity from stock
         stock.quantity -= quantityVal;
         await stock.save();
@@ -500,10 +540,11 @@ const recordStockOut = async (req, res, next) => {
             unit,
             usedFor,
             remarks,
+            photos: photoUrls,
             recordedBy: userId
         });
 
-        console.log(`✅ Stock Out recorded: ${materialName} - ${quantityVal} ${unit}`);
+        console.log(`âœ… Stock Out recorded: ${materialName} - ${quantityVal} ${unit}${photoUrls.length > 0 ? ` with ${photoUrls.length} photo(s)` : ''}`);
 
         res.status(201).json({
             success: true,
@@ -511,7 +552,7 @@ const recordStockOut = async (req, res, next) => {
             data: stockOut
         });
     } catch (error) {
-        console.error('❌ Error recording stock out:', error);
+        console.error('âŒ Error recording stock out:', error);
         next(error);
     }
 };
@@ -546,7 +587,8 @@ const getStockOuts = async (req, res, next) => {
             project: typeof s.projectId === 'object' ? s.projectId.name : s.projectId,
             projectId: typeof s.projectId === 'object' ? s.projectId._id : s.projectId, // Added for filtering
             usedFor: s.usedFor,
-            remarks: s.remarks || '-'
+            remarks: s.remarks || '-',
+            photos: s.photos || []
         }));
 
         res.json({
@@ -554,7 +596,7 @@ const getStockOuts = async (req, res, next) => {
             data: formattedData
         });
     } catch (error) {
-        console.error('❌ Error fetching stock outs:', error);
+        console.error('âŒ Error fetching stock outs:', error);
         next(error);
     }
 };
@@ -616,7 +658,7 @@ const addExpense = async (req, res, next) => {
         if (user.walletBalance < expenseAmount) {
             return res.status(400).json({
                 success: false,
-                error: `Insufficient wallet balance. Current: ₹${user.walletBalance}`
+                error: `Insufficient wallet balance. Current: â‚¹${user.walletBalance}`
             });
         }
 
@@ -945,7 +987,7 @@ const payLabour = async (req, res, next) => {
             if (user.walletBalance < finalAmount) {
                 return res.status(400).json({
                     success: false,
-                    error: `Insufficient wallet balance. Current: ₹${user.walletBalance}`
+                    error: `Insufficient wallet balance. Current: â‚¹${user.walletBalance}`
                 });
             }
 
@@ -985,18 +1027,40 @@ const payLabour = async (req, res, next) => {
 const getPayments = async (req, res, next) => {
     try {
         const userId = req.user.userId;
+        const { startDate, endDate, labourId } = req.query;
         const user = await User.findById(userId);
 
         if (!user) {
             return res.status(404).json({ success: false, error: 'User not found' });
         }
 
-        // Get payments made by this site manager using populate (simpler and more reliable)
-        const payments = await LabourPayment.find({ userId: user._id })
+        let query = { userId: user._id };
+
+        if (labourId) {
+            query.labourId = labourId;
+        }
+
+        if (startDate || endDate) {
+            query.createdAt = {};
+            if (startDate) query.createdAt.$gte = new Date(startDate);
+            if (endDate) {
+                const end = new Date(endDate);
+                end.setHours(23, 59, 59, 999);
+                query.createdAt.$lte = end;
+            }
+        }
+
+        let paymentsQuery = LabourPayment.find(query)
             .populate('labourId', 'name designation')
-            .sort('-createdAt')
-            .limit(50)
-            .lean();
+            .sort('-createdAt');
+
+        // Only limit if no date filter is applied to strictly get recent
+        // But for totals, we might want all? Let's limit default view, but if filters applied, show all matching.
+        if (!startDate && !endDate && !labourId) {
+            paymentsQuery = paymentsQuery.limit(50);
+        }
+
+        const payments = await paymentsQuery.lean();
 
         // Map to include labourName for frontend
         const formattedPayments = payments.map(p => ({
@@ -1007,18 +1071,16 @@ const getPayments = async (req, res, next) => {
             finalAmount: p.finalAmount,
             paymentMode: p.paymentMode,
             createdAt: p.createdAt,
-            labourId: p.labourId?._id || p.labourId, // Added for frontend identification/filtering
+            labourId: p.labourId?._id || p.labourId,
             labourName: p.labourId?.name || 'Unknown Labour'
         }));
-
-        console.log(`✅ Found ${formattedPayments.length} payments for user ${user.name}`);
 
         res.json({
             success: true,
             data: formattedPayments
         });
     } catch (error) {
-        console.error('❌ Error in getPayments:', error);
+        console.error('â Œ Error in getPayments:', error);
         next(error);
     }
 };
@@ -1119,11 +1181,11 @@ const getProjects = async (req, res, next) => {
             });
         }
 
-        console.log('🔍 Site Manager Projects - User:', user.name, 'assignedSites:', user.assignedSites);
+        console.log('ðŸ” Site Manager Projects - User:', user.name, 'assignedSites:', user.assignedSites);
 
         // Check if user has assigned sites
         if (!user.assignedSites || user.assignedSites.length === 0) {
-            console.log('ℹ️ No assigned sites for site manager, returning empty projects');
+            console.log('â„¹ï¸ No assigned sites for site manager, returning empty projects');
             return res.json({
                 success: true,
                 data: []
@@ -1134,14 +1196,14 @@ const getProjects = async (req, res, next) => {
             _id: { $in: user.assignedSites }
         });
 
-        console.log(`✅ Found ${projects.length} projects for site manager ${user.name}`);
+        console.log(`âœ… Found ${projects.length} projects for site manager ${user.name}`);
 
         res.json({
             success: true,
             data: projects
         });
     } catch (error) {
-        console.error('❌ Error in getProjects:', error);
+        console.error('âŒ Error in getProjects:', error);
         next(error);
     }
 };
@@ -1282,29 +1344,29 @@ const getMachines = async (req, res, next) => {
         }
 
         if (!user.assignedSites || user.assignedSites.length === 0) {
-            console.log('⚠️ No assigned sites for user:', user.name);
+            console.log('âš ï¸ No assigned sites for user:', user.name);
             return res.json({ success: true, data: [] });
         }
 
-        console.log(`🔍 Fetching machines for sites:`, user.assignedSites);
+        console.log(`ðŸ” Fetching machines for sites:`, user.assignedSites);
 
         const { projectId } = req.query;
         const query = projectId
             ? { projectId: projectId }
             : { projectId: { $in: user.assignedSites } };
 
-        console.log(`🔍 Fetching machines for query:`, query);
+        console.log(`ðŸ” Fetching machines for query:`, query);
 
         const machines = await Machine.find(query).populate('projectId', 'name');
 
-        console.log(`✅ Found ${machines.length} machines for user ${user.name}`);
+        console.log(`âœ… Found ${machines.length} machines for user ${user.name}`);
 
         res.json({
             success: true,
             data: machines
         });
     } catch (error) {
-        console.error('❌ Error in getMachines:', error);
+        console.error('âŒ Error in getMachines:', error);
         next(error);
     }
 };
@@ -1313,8 +1375,14 @@ const getMachines = async (req, res, next) => {
 
 const submitDailyReport = async (req, res, next) => {
     try {
-        const { projectId, reportType, description, photos, roadDistance, stockUsed } = req.body;
+        const { projectId, reportType, description, photos, roadProgress, stockUsed } = req.body;
         const userId = req.user.userId;
+
+        // Construct remarks string from roadProgress
+        let progressRemarks = '';
+        if (roadProgress && Array.isArray(roadProgress)) {
+            progressRemarks = roadProgress.map(rp => `${rp.description || 'Road'}: ${rp.value} ${rp.unit}`).join(', ');
+        }
 
         // Validate stock availability and deduct quantities
         if (stockUsed && stockUsed.length > 0) {
@@ -1343,9 +1411,9 @@ const submitDailyReport = async (req, res, next) => {
                     materialName: item.materialName,
                     quantity: item.quantity,
                     unit: item.unit,
-                    usedFor: `Daily Report - ${reportType}`, // Changed from 'purpose' to 'usedFor'
-                    remarks: `Road construction: ${roadDistance?.value || 0} ${roadDistance?.unit || 'm'}`,
-                    recordedBy: userId // Changed from 'issuedBy' to 'recordedBy'
+                    usedFor: `Daily Report - ${reportType}`,
+                    remarks: `Road construction: ${progressRemarks}`,
+                    recordedBy: userId
                 });
 
                 // Store stockId in the item for reference
@@ -1359,14 +1427,14 @@ const submitDailyReport = async (req, res, next) => {
             reportType,
             description,
             photos: photos || [],
-            roadDistance: roadDistance || { value: 0, unit: 'm' },
+            roadProgress: roadProgress || [],
             stockUsed: stockUsed || [],
             submittedBy: userId
         });
 
         await dailyReport.save();
 
-        console.log(`✅ Daily Report submitted for project ${projectId} by user ${userId}`);
+        console.log(`âœ… Daily Report submitted for project ${projectId} by user ${userId}`);
 
         res.status(201).json({
             success: true,
@@ -1374,7 +1442,7 @@ const submitDailyReport = async (req, res, next) => {
             data: dailyReport
         });
     } catch (error) {
-        console.error('❌ Error submitting daily report:', error);
+        console.error('âŒ Error submitting daily report:', error);
         next(error);
     }
 };
@@ -1396,51 +1464,38 @@ const getDailyReports = async (req, res, next) => {
             .sort('-createdAt')
             .limit(50);
 
-        console.log(`✅ Found ${reports.length} daily reports for user ${user.name}`);
+        console.log(`âœ… Found ${reports.length} daily reports for user ${user.name}`);
 
         res.json({
             success: true,
             data: reports
         });
     } catch (error) {
-        console.error('❌ Error fetching daily reports:', error);
+        console.error('âŒ Error fetching daily reports:', error);
         next(error);
     }
 };
 
-module.exports = {
-    getDashboard,
-    markAttendance,
-    getMyAttendance,
-    getLabours,
-    enrollLabour,
-    updateLabour,
-    markLabourAttendance,
-    getLabourAttendance,
-    addStockIn,
-    getStocks,
-    recordStockOut,
-    getStockOuts,
-    addStockOut, // Added this export
-    getStockMovements,
-    submitDailyReport,
-    getDailyReports,
-    uploadGalleryImages,
-    getGalleryImages,
-    addExpense,
-    getExpenses,
-    requestTransfer,
-    getTransfers,
-    payLabour,
-    getPayments,
-    getNotifications,
-    markNotificationRead,
-    getProfile,
-    getVendors,
-    getProjects,
-    getMachines,
-    getMaterials
+const getAllMaterialNames = async (req, res, next) => {
+    try {
+        // Fetch unique material names from Stock
+        const stockMaterials = await Stock.distinct('materialName');
+
+        // Fetch defined item names (categories: big, lab, consumables, equipment)
+        const itemNames = await ItemName.distinct('name', { category: 'consumables' });
+
+        // Combine and unique
+        const allMaterials = [...new Set([...stockMaterials, ...itemNames])].sort();
+
+        res.status(200).json({
+            success: true,
+            data: allMaterials
+        });
+    } catch (error) {
+        next(error);
+    }
 };
+
 
 // ============ LAB EQUIPMENT ============
 
@@ -1463,7 +1518,7 @@ const getLabEquipments = async (req, res, next) => {
 
         res.json({ success: true, data: labEquipments });
     } catch (error) {
-        console.error('❌ Error fetching lab equipments:', error);
+        console.error('âŒ Error fetching lab equipments:', error);
         next(error);
     }
 };
@@ -1487,7 +1542,7 @@ const getConsumableGoods = async (req, res, next) => {
 
         res.json({ success: true, data: consumableGoods });
     } catch (error) {
-        console.error('❌ Error fetching consumable goods:', error);
+        console.error('âŒ Error fetching consumable goods:', error);
         next(error);
     }
 };
@@ -1511,7 +1566,7 @@ const getEquipments = async (req, res, next) => {
 
         res.json({ success: true, data: equipments });
     } catch (error) {
-        console.error('❌ Error fetching equipments:', error);
+        console.error('âŒ Error fetching equipments:', error);
         next(error);
     }
 };
@@ -1526,7 +1581,7 @@ const getSiteMachines = async (req, res, next) => {
         const user = await User.findById(userId);
 
         if (!user || !user.assignedSites || user.assignedSites.length === 0) {
-            console.log('⚠️ User has no assigned sites:', user);
+            console.log('âš ï¸ User has no assigned sites:', user);
             return res.json({
                 success: true,
                 data: [],
@@ -1738,7 +1793,7 @@ const getContractors = async (req, res, next) => {
 
 const payContractor = async (req, res, next) => {
     try {
-        const { contractorId, projectId, amount, paymentMode, remarks } = req.body;
+        const { contractorId, projectId, amount, paymentMode, remarks, advance, deduction } = req.body;
         const userId = req.user.userId;
         const user = await User.findById(userId);
 
@@ -1756,6 +1811,8 @@ const payContractor = async (req, res, next) => {
             contractorId,
             projectId,
             amount: payAmount,
+            advance: advance || 0,
+            deduction: deduction || 0,
             date: new Date(),
             paymentMode: paymentMode || 'cash',
             remarks: remarks || '',
@@ -1770,7 +1827,7 @@ const payContractor = async (req, res, next) => {
 
 const payVendor = async (req, res, next) => {
     try {
-        const { vendorId, amount, paymentMode, remarks } = req.body;
+        const { vendorId, amount, paymentMode, remarks, advance, deduction } = req.body;
         const userId = req.user.userId;
         const user = await User.findById(userId);
         const vendor = await Vendor.findById(vendorId);
@@ -1791,6 +1848,8 @@ const payVendor = async (req, res, next) => {
         const payment = new VendorPayment({
             vendorId,
             amount: payAmount,
+            advance: advance || 0,
+            deduction: deduction || 0,
             date: new Date(),
             paymentMode: paymentMode || 'cash',
             remarks: remarks || '',
@@ -1811,11 +1870,24 @@ const updateLabourAttendance = async (req, res, next) => {
         const attendance = await LabourAttendance.findById(id);
         if (!attendance) return res.status(404).json({ success: false, error: 'Record not found' });
 
+        // Check if date is today
+        const attendanceDate = new Date(attendance.date).setHours(0, 0, 0, 0);
+        const today = new Date().setHours(0, 0, 0, 0);
+
+        if (attendanceDate < today) {
+            return res.status(403).json({
+                success: false,
+                error: 'Cannot edit past attendance. Only today\'s attendance can be modified.'
+            });
+        }
+
         const labour = await Labour.findById(attendance.labourId);
         if (labour) {
+            // Revert previous payout
             if (attendance.status === 'present') await Labour.findByIdAndUpdate(attendance.labourId, { $inc: { pendingPayout: -labour.dailyWage } });
             else if (attendance.status === 'half') await Labour.findByIdAndUpdate(attendance.labourId, { $inc: { pendingPayout: -(labour.dailyWage / 2) } });
 
+            // Apply new payout
             if (status === 'present') await Labour.findByIdAndUpdate(attendance.labourId, { $inc: { pendingPayout: labour.dailyWage } });
             else if (status === 'half') await Labour.findByIdAndUpdate(attendance.labourId, { $inc: { pendingPayout: (labour.dailyWage / 2) } });
         }
@@ -2015,6 +2087,145 @@ const getContractorDetails = async (req, res, next) => {
         next(error);
     }
 };
+// Get Single Project Details (Site Manager)
+const getProjectDetails = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user.userId;
+
+        // Verify project assignment (Optional: if middleware already checks generally, but good for specific ID access)
+        const user = await User.findById(userId);
+        if (!user || !user.assignedSites || !user.assignedSites.includes(id)) {
+            return res.status(403).json({
+                success: false,
+                error: 'Access denied. You are not assigned to this project.'
+            });
+        }
+
+        const project = await Project.findById(id)
+            .populate('assignedManager', 'name email')
+            .lean();
+
+        if (!project) {
+            return res.status(404).json({
+                success: false,
+                error: 'Project not found'
+            });
+        }
+
+        // Fetch related data in parallel (Scoped to this project)
+        const [expenses, labours, stocks, machines, contractors] = await Promise.all([
+            Expense.find({ projectId: id }).sort('-createdAt').limit(50).lean(),
+            Labour.find({ assignedSite: id }).populate('contractorId', 'name').lean(),
+            Stock.find({ projectId: id }).populate('vendorId', 'name').sort('-createdAt').limit(50).lean(),
+            Machine.find({ projectId: id }).sort('-createdAt').lean(),
+            Contractor.find({ assignedProjects: id }).lean()
+        ]);
+
+        res.json({
+            success: true,
+            data: {
+                project,
+                expenses,
+                labours,
+                stocks,
+                machines,
+                contractors
+            }
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// Get Contractor Payments for Site Manager
+const getContractorPayments = async (req, res, next) => {
+    try {
+        const userId = req.user.userId;
+        const { startDate, endDate, contractorId } = req.query;
+        const user = await User.findById(userId);
+
+        if (!user) {
+            return res.status(404).json({ success: false, error: 'User not found' });
+        }
+
+        let query = { paidBy: userId };
+
+        if (contractorId) {
+            query.contractorId = contractorId;
+        }
+
+        if (startDate || endDate) {
+            query.date = {};
+            if (startDate) query.date.$gte = new Date(startDate);
+            if (endDate) {
+                const end = new Date(endDate);
+                end.setHours(23, 59, 59, 999);
+                query.date.$lte = end;
+            }
+        }
+
+        let paymentsQuery = ContractorPayment.find(query)
+            .populate('contractorId', 'name contactPerson phone')
+            .populate('projectId', 'name location')
+            .sort('-date');
+
+        if (!startDate && !endDate && !contractorId) {
+            paymentsQuery = paymentsQuery.limit(50);
+        }
+
+        const payments = await paymentsQuery.lean();
+
+        res.json({
+            success: true,
+            data: payments
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// Get Vendor Payments for Site Manager
+const getVendorPayments = async (req, res, next) => {
+    try {
+        const userId = req.user.userId;
+        const { startDate, endDate, vendorId } = req.query;
+
+        let query = { recordedBy: userId };
+
+        if (vendorId) {
+            query.vendorId = vendorId;
+        }
+
+        if (startDate || endDate) {
+            query.date = {};
+            if (startDate) query.date.$gte = new Date(startDate);
+            if (endDate) {
+                const end = new Date(endDate);
+                end.setHours(23, 59, 59, 999);
+                query.date.$lte = end;
+            }
+        }
+
+        let paymentsQuery = VendorPayment.find(query)
+            .populate('vendorId', 'name contact')
+            .sort('-date');
+
+        if (!startDate && !endDate && !vendorId) {
+            paymentsQuery = paymentsQuery.limit(50);
+        }
+
+        const payments = await paymentsQuery.lean();
+
+        res.json({
+            success: true,
+            data: payments
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getDashboard,
     markAttendance,
@@ -2047,6 +2258,7 @@ module.exports = {
     getProjects,
     getMachines,
     getMaterials,
+    getAllMaterialNames,
     getLabEquipments,
     getConsumableGoods,
     getEquipments,
@@ -2061,5 +2273,8 @@ module.exports = {
     getLabourDetails,
     getSiteContractors,
     addContractor,
-    getContractorDetails
+    getContractorDetails,
+    getProjectDetails,
+    getContractorPayments,
+    getVendorPayments
 };

@@ -1023,10 +1023,11 @@ const updateMachine = async (req, res, next) => {
             machinePhotoUrl = await uploadToCloudinary(req.file.buffer, 'machines');
         }
 
-        // Sanitize projectId
+        // Sanitize projectId and assignedToContractor
         const updateData = {
             ...req.body,
-            projectId: req.body.projectId && String(req.body.projectId).trim() !== '' ? req.body.projectId : null
+            projectId: req.body.projectId && String(req.body.projectId).trim() !== '' ? req.body.projectId : null,
+            assignedToContractor: req.body.assignedToContractor && String(req.body.assignedToContractor).trim() !== '' ? req.body.assignedToContractor : null
         };
 
         if (machinePhotoUrl) {
@@ -1119,7 +1120,39 @@ const returnRentedMachine = async (req, res, next) => {
         // Calculate rental details
         const assignedDate = new Date(machine.assignedAt);
         const returnDate = new Date();
-        const diffTime = Math.abs(returnDate - assignedDate);
+        const diffTime = Math.abs(returnDate - assignedDate); // Total milliseconds
+
+        // --- Calculate Paused Duration ---
+        let totalPausedMs = 0;
+
+        // 1. Sum up closed pauses that happened AFTER assignment
+        if (machine.rentPausedHistory && machine.rentPausedHistory.length > 0) {
+            machine.rentPausedHistory.forEach(pause => {
+                const pauseStart = new Date(pause.pausedAt).getTime();
+                const pauseEnd = pause.resumedAt ? new Date(pause.resumedAt).getTime() : returnDate.getTime();
+
+                // Only count pauses that started after assignment
+                if (pauseStart >= assignedDate.getTime()) {
+                    // Ensure we don't count beyond return date
+                    const effectiveEnd = Math.min(pauseEnd, returnDate.getTime());
+                    totalPausedMs += (effectiveEnd - pauseStart);
+                }
+            });
+        }
+
+        // 2. Add current open pause if active
+        // Note: If isRentPaused is true, the current pause is NOT yet in rentPausedHistory (based on siteController logic)
+        // OR it might be partially handled. 
+        // Logic: active pause starts at machine.rentPausedAt.
+        if (machine.isRentPaused && machine.rentPausedAt) {
+            const currentPauseStart = new Date(machine.rentPausedAt).getTime();
+            if (currentPauseStart >= assignedDate.getTime()) {
+                totalPausedMs += (returnDate.getTime() - currentPauseStart);
+            }
+        }
+
+        // Calculate Billable Duration
+        const billableMs = Math.max(0, diffTime - totalPausedMs);
 
         // This is the RATE (either per day or per hour)
         const rate = parseFloat(machine.assignedAsRental ? machine.assignedRentalPerDay : machine.perDayExpense) || 0;
@@ -1130,17 +1163,23 @@ const returnRentedMachine = async (req, res, next) => {
 
         if (machine.rentalType === 'perHour') {
             // Minute-based calculation
-            const diffMinutes = Math.ceil(diffTime / (1000 * 60));
-            const ratePerMinute = rate / 60;
-            totalRent = diffMinutes * ratePerMinute;
-            diffDisplay = `${diffMinutes} mins`;
-            diffValue = diffMinutes;
+            // Use exact float hours to match Site Panel logic and avoid rounding discrepancies
+            const hours = billableMs / (1000 * 60 * 60);
+            totalRent = hours * rate;
+
+            // For display/storage
+            diffDisplay = `${hours.toFixed(2)} hrs`;
+            diffValue = hours * 60; // Store minutes
         } else {
             // Day-based calculation
-            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-            totalRent = diffDays * rate;
-            diffDisplay = `${diffDays} days`;
-            diffValue = diffDays;
+            // Logic: billableMs / DayMs. Math.ceil for full days?
+            const billableDays = billableMs / (1000 * 60 * 60 * 24);
+            // Site logic: Math.ceil(billableDays) * rate
+            const chargeableDays = Math.ceil(billableDays);
+
+            totalRent = chargeableDays * rate;
+            diffDisplay = `${chargeableDays} days`;
+            diffValue = chargeableDays;
         }
 
         if (isNaN(totalRent)) totalRent = 0;
@@ -1207,7 +1246,7 @@ const getStocks = async (req, res, next) => {
 
         // Get stocks without any population for maximum speed
         const stocks = await Stock.find()
-            .select('projectId vendorId materialName unit quantity unitPrice totalPrice remarks createdAt')
+            .select('projectId vendorId materialName unit quantity unitPrice totalPrice remarks photo createdAt')
             .sort('-createdAt')
             .lean()
             .maxTimeMS(2000); // 2 second timeout
@@ -1695,10 +1734,20 @@ const getAccounts = async (req, res, next) => {
         allTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));
 
         // Calculate totals
-        const capital = manualTransactions
+        // Capital Credits (money added)
+        const capitalCredits = manualTransactions
             .filter(t => t.category === 'capital' && t.type === 'credit')
             .reduce((sum, t) => sum + (t.amount || 0), 0);
 
+        // Total Debits (all money spent - expenses, payments, etc.)
+        const totalDebits = allTransactions
+            .filter(t => t.type === 'debit')
+            .reduce((sum, t) => sum + (t.amount || 0), 0);
+
+        // Net Capital = Capital Credits - Total Debits
+        const capital = capitalCredits - totalDebits;
+
+        // Total Expenses (for display purposes)
         const totalExpenses = allTransactions
             .filter(t => t.type === 'debit')
             .reduce((sum, t) => sum + (t.amount || 0), 0);

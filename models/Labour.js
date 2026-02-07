@@ -33,6 +33,11 @@ const labourSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
     },
+    contractorId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Contractor',
+        default: null
+    },
     active: {
         type: Boolean,
         default: true

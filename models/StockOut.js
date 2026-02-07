@@ -37,6 +37,10 @@ const stockOutSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    photos: [{
+        type: String, // Cloudinary URLs
+        trim: true
+    }],
     recordedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'

@@ -57,6 +57,11 @@ const stockSchema = new mongoose.Schema({
     addedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
+    },
+    paymentStatus: {
+        type: String,
+        enum: ['credit', 'paid'],
+        default: 'credit'
     }
 }, {
     timestamps: true

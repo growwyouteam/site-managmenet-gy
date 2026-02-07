@@ -23,17 +23,22 @@ const dailyReportSchema = new mongoose.Schema({
     photos: [{
         type: String // URLs of photos
     }],
-    roadDistance: {
+    roadProgress: [{
+        description: {
+            type: String,
+            trim: true
+        },
         value: {
             type: Number,
-            min: 0
+            min: 0,
+            required: true
         },
         unit: {
             type: String,
             enum: ['m', 'km'],
             default: 'm'
         }
-    },
+    }],
     stockUsed: [{
         materialName: {
             type: String,

@@ -4,7 +4,7 @@
  */
 
 require('dotenv').config();
-const express = require('express');
+const express = require('express'); // Trigger restart
 const session = require('express-session');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -63,8 +63,29 @@ app.use(helmet({
 app.use(compression());
 
 // CORS configuration
+// CORS configuration
+const allowedOrigins = [
+  process.env.FRONTEND_URL || 'http://localhost:3000',
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173'
+];
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.indexOf(origin) === -1) {
+      // Check if it matches any local dev regex if needed, or just allow all localhost for dev
+      if (process.env.NODE_ENV === 'development' && origin.includes('localhost')) {
+        return callback(null, true);
+      }
+      var msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
   credentials: true
 }));
 

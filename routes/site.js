@@ -6,7 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { isAuthenticated, isSiteManager } = require('../middleware/auth');
-const { uploadSingle } = require('../middleware/upload');
+const { uploadSingle, uploadPhotos } = require('../middleware/upload');
 const {
   labourValidation,
   attendanceValidation,
@@ -43,6 +43,7 @@ const {
   getProjects,
   getMachines,
   getMaterials,
+  getAllMaterialNames,
   getLabEquipments,
   getConsumableGoods,
   getEquipments,
@@ -57,7 +58,10 @@ const {
   getLabourDetails,
   getSiteContractors,
   addContractor,
-  getContractorDetails
+  getContractorDetails,
+  getProjectDetails,
+  getContractorPayments,
+  getVendorPayments
 } = require('../controllers/siteController');
 
 // Apply authentication and site manager middleware to all routes
@@ -86,7 +90,7 @@ router.post('/stock-in', uploadSingle, addStockIn);
 router.get('/stocks', getStocks);
 
 // Stock Out
-router.post('/stock-out', recordStockOut);
+router.post('/stock-out', uploadPhotos, recordStockOut);
 router.get('/stock-outs', getStockOuts);
 
 // Daily Report
@@ -121,12 +125,17 @@ router.get('/vendors', getVendors);
 
 // Projects (assigned)
 router.get('/projects', getProjects);
+router.get('/projects/:id', getProjectDetails);
 
 // Machines (assigned)
 router.get('/machines', getMachines);
 
 // Materials (for transfer dropdown)
+// Materials (for transfer dropdown)
 router.get('/materials', getMaterials);
+
+// All Material Names (for Stock In dropdown)
+router.get('/all-materials', getAllMaterialNames);
 
 // Lab Equipment
 router.get('/lab-equipments', getLabEquipments);
@@ -143,9 +152,11 @@ router.get('/wallet-transactions', getWalletTransactions);
 // Contractors
 router.get('/contractors', getContractors);
 router.post('/payments/contractor', payContractor);
+router.get('/payments/contractor', getContractorPayments); // Added
 
 // Vendor Payments
 router.post('/payments/vendor', payVendor);
+router.get('/payments/vendor', getVendorPayments); // Added
 
 // Site Manager Machines
 router.get('/site-machines', getSiteMachines);
