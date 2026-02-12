@@ -50,6 +50,10 @@ const stockSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    photos: [{
+        type: String,
+        trim: true
+    }],
     remarks: {
         type: String,
         trim: true

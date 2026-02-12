@@ -92,6 +92,13 @@ const machineSchema = new mongoose.Schema({
         resumedAt: Date,
         duration: Number // in hours
     }],
+    maintenanceHistory: [{
+        enteredAt: Date,
+        completedAt: Date,
+        cost: Number,
+        description: String,
+        remark: String
+    }],
     assignmentHistory: [{
         assignedTo: {
             type: mongoose.Schema.Types.ObjectId,

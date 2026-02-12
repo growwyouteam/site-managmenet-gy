@@ -1015,47 +1015,71 @@ const createMachine = async (req, res, next) => {
 const updateMachine = async (req, res, next) => {
     try {
         const { id } = req.params;
+        const updates = req.body;
+        const { maintenanceCost, maintenanceDescription } = req.body;
 
-        // Upload photo to Cloudinary if file exists
-        let machinePhotoUrl = undefined;
-        if (req.file) {
-            const { uploadToCloudinary } = require('../config/cloudinary');
-            machinePhotoUrl = await uploadToCloudinary(req.file.buffer, 'machines');
-        }
-
-        // Sanitize projectId and assignedToContractor
-        const updateData = {
-            ...req.body,
-            projectId: req.body.projectId && String(req.body.projectId).trim() !== '' ? req.body.projectId : null,
-            assignedToContractor: req.body.assignedToContractor && String(req.body.assignedToContractor).trim() !== '' ? req.body.assignedToContractor : null
-        };
-
-        if (machinePhotoUrl) {
-            updateData.machinePhoto = machinePhotoUrl;
-        }
-
-        // Fetch existing machine to check state change
         const machine = await Machine.findById(id);
         if (!machine) {
             return res.status(404).json({ success: false, error: 'Machine not found' });
         }
 
-        const wasAvailable = machine.status === 'available';
+        // Handle Photo Upload
+        if (req.file) {
+            const { uploadToCloudinary } = require('../config/cloudinary');
+            const url = await uploadToCloudinary(req.file.buffer, 'machines');
+            updates.machinePhoto = url;
+        }
 
-        // Apply updates
-        Object.assign(machine, updateData);
-
-        // Check if status changed from available to in-use
-        if (machine.status === 'in-use' && wasAvailable) {
-            machine.assignmentHistory.push({
-                assignedTo: machine.assignedToContractor || machine.projectId,
-                assignedModel: machine.assignedToContractor ? 'Contractor' : 'Project',
-                assignedAt: machine.assignedAt || new Date(),
-                initialStatus: 'in-use',
-                rentType: machine.rentalType,
-                rate: machine.assignedRentalPerDay,
-                durationMinutes: 0
+        // Handle Status Changes for Maintenance
+        if (updates.status === 'maintenance' && machine.status !== 'maintenance') {
+            // Starting maintenance
+            updates.maintenanceHistory = machine.maintenanceHistory || [];
+            updates.maintenanceHistory.push({
+                enteredAt: new Date(),
+                description: updates.remarks || 'Routine Maintenance'
             });
+        } else if (machine.status === 'maintenance' && updates.status === 'available') {
+            // Ending maintenance
+            if (maintenanceCost && Number(maintenanceCost) > 0) {
+                const history = machine.maintenanceHistory || [];
+                const lastRecord = history[history.length - 1];
+                if (lastRecord && !lastRecord.completedAt) {
+                    lastRecord.completedAt = new Date();
+                    lastRecord.cost = Number(maintenanceCost);
+                    lastRecord.description = maintenanceDescription || lastRecord.description;
+                    updates.maintenanceHistory = history;
+                }
+
+                // Create Expense
+                const newExpense = new Expense({
+                    projectId: machine.projectId, // Use existing project if available
+                    name: `Maintenance: ${machine.name}`,
+                    category: 'maintenance',
+                    amount: Number(maintenanceCost),
+                    date: new Date(),
+                    remarks: maintenanceDescription || `Maintenance for ${machine.name}`,
+                    paymentMode: 'cash',
+                    addedBy: req.user.userId
+                });
+                await newExpense.save();
+
+                // Update project expenses if assigned
+                if (machine.projectId) {
+                    await Project.findByIdAndUpdate(machine.projectId, { $inc: { expenses: Number(maintenanceCost) } });
+                }
+            }
+        }
+
+        // Normal updates
+        Object.keys(updates).forEach(key => {
+            if (key !== 'maintenanceCost' && key !== 'maintenanceDescription') {
+                machine[key] = updates[key];
+            }
+        });
+
+        // Sanitize projectId
+        if (updates.projectId === '' || updates.projectId === 'null') {
+            machine.projectId = null;
         }
 
         await machine.save();
@@ -1276,11 +1300,28 @@ const createStock = async (req, res, next) => {
 
         const totalPrice = parseFloat(quantity) * parseFloat(unitPrice);
 
-        // Upload photo to Cloudinary if file exists
-        let photoUrl = null;
+        let photoUrl = '';
+        let photosUrls = [];
+
+        // Handle single file (legacy)
         if (req.file) {
             const { uploadToCloudinary } = require('../config/cloudinary');
-            photoUrl = await uploadToCloudinary(req.file.buffer, 'stock');
+            photoUrl = await uploadToCloudinary(req.file.buffer, 'stocks');
+            photosUrls.push(photoUrl);
+        }
+
+        // Handle multiple files
+        if (req.files && req.files.length > 0) {
+            const { uploadToCloudinary } = require('../config/cloudinary');
+            for (const file of req.files) {
+                const url = await uploadToCloudinary(file.buffer, 'stocks');
+                photosUrls.push(url);
+            }
+        }
+
+        // Use first photo as main photo if not set
+        if (!photoUrl && photosUrls.length > 0) {
+            photoUrl = photosUrls[0];
         }
 
         const newStock = new Stock({
@@ -1292,6 +1333,7 @@ const createStock = async (req, res, next) => {
             unitPrice: parseFloat(unitPrice),
             totalPrice,
             photo: photoUrl,
+            photos: photosUrls,
             remarks,
             addedBy: userId
         });
@@ -1326,31 +1368,46 @@ const updateStock = async (req, res, next) => {
         const { id } = req.params;
         const updates = req.body;
 
-        // Recalculate total price if quantity or unitPrice changed
-        if (updates.quantity || updates.unitPrice) {
-            const stock = await Stock.findById(id);
-            const quantity = updates.quantity || stock.quantity;
-            const unitPrice = updates.unitPrice || stock.unitPrice;
-            updates.totalPrice = parseFloat(quantity) * parseFloat(unitPrice);
+        const stock = await Stock.findById(id);
+        if (!stock) {
+            return res.status(404).json({ success: false, error: 'Stock not found' });
         }
 
-        const stock = await Stock.findByIdAndUpdate(
+        // Handle new photos
+        if (req.files && req.files.length > 0) {
+            const { uploadToCloudinary } = require('../config/cloudinary');
+            const newPhotos = [];
+            for (const file of req.files) {
+                const url = await uploadToCloudinary(file.buffer, 'stocks');
+                newPhotos.push(url);
+            }
+            if (!stock.photos) stock.photos = [];
+            stock.photos.push(...newPhotos);
+            updates.photos = stock.photos;
+
+            // Update main photo if it was empty
+            if (!stock.photo && newPhotos.length > 0) {
+                updates.photo = newPhotos[0];
+            }
+        }
+
+        // Recalculate total price if quantity or unitPrice changed
+        if (updates.quantity || updates.unitPrice) {
+            const quantity = updates.quantity ? parseFloat(updates.quantity) : stock.quantity;
+            const unitPrice = updates.unitPrice ? parseFloat(updates.unitPrice) : stock.unitPrice;
+            updates.totalPrice = quantity * unitPrice;
+        }
+
+        const updatedStock = await Stock.findByIdAndUpdate(
             id,
             updates,
             { new: true, runValidators: true }
         );
 
-        if (!stock) {
-            return res.status(404).json({
-                success: false,
-                error: 'Stock not found'
-            });
-        }
-
         res.json({
             success: true,
             message: 'Stock updated successfully',
-            data: stock
+            data: updatedStock
         });
     } catch (error) {
         next(error);

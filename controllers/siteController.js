@@ -1977,8 +1977,8 @@ const getLabourDetails = async (req, res, next) => {
 
         // 1. Fetch Payment History (Across ALL Projects)
         const payments = await LabourPayment.find({ labourId: id })
-            .populate('userId', 'name') // Paid by whom
-            .sort('-date')
+            .populate('paidBy', 'name') // Paid by whom
+            .sort('-createdAt')
             .lean();
 
         // 2. Fetch Attendance Summary
@@ -1988,13 +1988,25 @@ const getLabourDetails = async (req, res, next) => {
             .limit(30) // Last 30 records
             .lean();
 
+        // 3. Calculate totals
+        const totalPaid = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+        const totalAdvances = payments.reduce((sum, p) => sum + (p.advance || 0), 0);
+        const totalDeductions = payments.reduce((sum, p) => sum + (p.deduction || 0), 0);
+
+        // 4. Separate advances from wage payments
+        const wagePayments = payments.filter(p => (p.advance || 0) === 0);
+        const advancePayments = payments.filter(p => (p.advance || 0) > 0);
+
         res.json({
             success: true,
             data: {
                 labour,
-                payments,
+                payments: wagePayments,
+                advances: advancePayments,
                 attendance,
-                totalPaid: payments.reduce((sum, p) => sum + (p.amount || 0), 0)
+                totalPaid,
+                totalAdvances,
+                totalDeductions
             }
         });
     } catch (error) {
@@ -2010,8 +2022,20 @@ const getSiteContractors = async (req, res, next) => {
 
         const contractors = await Contractor.find({
             assignedProjects: { $in: user.assignedSites }
-        });
-        res.json({ success: true, data: contractors });
+        }).lean();
+
+        // Add labour count for each contractor
+        const contractorsWithLabourCount = await Promise.all(
+            contractors.map(async (contractor) => {
+                const labourCount = await Labour.countDocuments({ contractorId: contractor._id });
+                return {
+                    ...contractor,
+                    labourCount
+                };
+            })
+        );
+
+        res.json({ success: true, data: contractorsWithLabourCount });
     } catch (error) {
         next(error);
     }

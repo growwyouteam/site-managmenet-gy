@@ -8,7 +8,7 @@ const expenseSchema = new mongoose.Schema({
     projectId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Project',
-        required: [true, 'Project is required']
+        required: false
     },
     name: {
         type: String,
@@ -26,7 +26,7 @@ const expenseSchema = new mongoose.Schema({
     },
     category: {
         type: String,
-        enum: ['material', 'labour', 'equipment', 'other', 'machine_rental'],
+        enum: ['material', 'labour', 'equipment', 'other', 'machine_rental', 'maintenance'],
         default: 'material'
     },
     paymentMode: {

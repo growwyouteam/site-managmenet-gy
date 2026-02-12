@@ -6,7 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { isAuthenticated, isAdmin } = require('../middleware/auth');
-const { uploadSingle, uploadReceipt, uploadMultiple } = require('../middleware/upload');
+const { uploadSingle, uploadReceipt, uploadMultiple, uploadPhotos } = require('../middleware/upload');
 const {
   projectValidation,
   userValidation,
@@ -120,8 +120,8 @@ router.post('/machines/:id/return', returnRentedMachine);
 
 // Stock
 router.get('/stocks', getStocks);
-router.post('/stocks', uploadSingle, stockValidation, createStock);
-router.put('/stocks/:id', updateStock);
+router.post('/stocks', uploadPhotos, stockValidation, createStock);
+router.put('/stocks/:id', uploadPhotos, updateStock);
 router.delete('/stocks/:id', deleteStock);
 
 // Vendors
@@ -196,24 +196,20 @@ router.get('/bank-details', isAuthenticated, isAdmin, getBankDetails);
 router.post('/bank-details', isAuthenticated, isAdmin, addBankDetail); // Add ID validation if needed
 router.put('/bank-details/:id', isAuthenticated, isAdmin, updateBankDetail);
 router.delete('/bank-details/:id', isAuthenticated, isAdmin, deleteBankDetail);
-router.delete('/bank-details/:id', isAuthenticated, isAdmin, deleteBankDetail);
 router.get('/bank-details/:id', isAuthenticated, isAdmin, getBankDetailWithTransactions);
 router.post('/bank-details/transfer', isAuthenticated, isAdmin, transferBankToBank);
 
-// ============ CREDITORS ============
-router.post('/bank-details/transfer', isAuthenticated, isAdmin, transferBankToBank);
-
-// Item Names (Stock Detail)
+// Item Names (for dropdowns)
 router.post('/item-names', createItemName);
 router.get('/item-names', getItemNames);
 router.delete('/item-names/:id', deleteItemName);
 
-// ============ CREDITORS ============
-router.get('/creditors', isAuthenticated, isAdmin, getCreditors);
-router.post('/creditors', isAuthenticated, isAdmin, createCreditor);
-router.post('/creditors/payment', isAuthenticated, isAdmin, recordCreditorPayment);
-router.put('/creditors/:id', isAuthenticated, isAdmin, updateCreditor);
-router.delete('/creditors/:id', isAuthenticated, isAdmin, deleteCreditor);
-router.get('/creditors/:id', isAuthenticated, isAdmin, getCreditorDetails);
+// Creditors
+router.get('/creditors', getCreditors);
+router.post('/creditors', createCreditor);
+router.put('/creditors/:id', updateCreditor);
+router.delete('/creditors/:id', deleteCreditor);
+router.get('/creditors/:id', getCreditorDetails);
+router.post('/creditors/payment', recordCreditorPayment);
 
 module.exports = router;
